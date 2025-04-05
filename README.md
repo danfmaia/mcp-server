@@ -40,14 +40,14 @@ This project contains a general MCP server designed to provide tools for AI agen
 
 This project uses `uv` for environment and dependency management, orchestrated via a `Makefile`.
 
-1.  **Navigate to the server directory:**
-
+1.  **Navigate to the project directory:**
+    Ensure you are in the root directory of *this* project (`mcp_server`).
     ```bash
-    cd tools/mcp_server
+    cd /path/to/mcp_server 
     ```
 
 2.  **Install dependencies (including dev/test):**
-    This command creates a local virtual environment (`.venv`) if it doesn't exist and installs all necessary packages.
+    This command creates a local virtual environment (`.venv`) if it doesn't exist and installs all necessary packages using `uv`.
 
     ```bash
     make install-dev
@@ -98,13 +98,14 @@ This server can be integrated with Cursor as an MCP tool using the following glo
     "local-link-checker": {
       "name": "Local Link Checker", // Name displayed in Cursor
       "type": "command",
-      "command": "/path/to/your/project/.venv/bin/uv", // <<-- IMPORTANT: Use the ABSOLUTE path to 'uv' from your PROJECT's venv
+      // Use the absolute path to the python executable within THIS project's venv
+      "command": "/absolute/path/to/mcp_server/.venv/bin/python", 
       "args": [
-        "run",
-        "--directory",
-        "/path/to/your/project/tools/mcp_server", // <<-- IMPORTANT: Use the ABSOLUTE path to this server's directory
-        "mcp_server" // Script name defined in tools/mcp_server/pyproject.toml
-      ]
+        "-m",                   // Run module
+        "mcp_server.server"     // The server module to run
+      ],
+      // Optional: Define the working directory if needed (usually handled by -m)
+      // "cwd": "/absolute/path/to/mcp_server"
     }
   }
 }
@@ -112,12 +113,12 @@ This server can be integrated with Cursor as an MCP tool using the following glo
 
 **Important Notes for Integration:**
 
-- **Absolute Paths:** You MUST replace the placeholder paths in the `"command"` and `"args"` fields with the correct, absolute paths specific to your system.
-- **`uv` Location:** The `uv` executable must be accessible via the specified path. It's often found in the virtual environment of the main project where you installed global tools (`/path/to/your/project/.venv/bin/uv`). Run `which uv` in your activated project environment if unsure.
-- **Working Directory:** This configuration runs the server with its working directory set to `tools/mcp_server`. Therefore, when invoking the tool (e.g., `@Local Link Checker`), the `file_path` argument must be **relative to the `tools/mcp_server` directory**, not the project root. For example, to check `tools/mcp_server/test_links.md`, use `file_path: test_links.md`.
-- **Restart Cursor:** After adding or modifying `~/.cursor/mcp.json`, you must restart Cursor for the changes to take effect.
+-   **Absolute Paths:** You MUST replace `/absolute/path/to/mcp_server` with the correct, absolute path to this project's directory on your system.
+-   **Virtual Environment:** This configuration assumes you have run `make install-dev` first to create the `.venv` and install dependencies within this project directory.
+-   **Working Directory & File Paths:** When run via `python -m`, the server's working directory is typically the project root (`/absolute/path/to/mcp_server`). Therefore, when invoking the tool (e.g., `@Local Link Checker`), the `file_path` argument should be relative to this project root (e.g., `file_path: test_links.md` for a file at the root) or an absolute path.
+-   **Restart Cursor:** After adding or modifying `~/.cursor/mcp.json`, you must restart Cursor for the changes to take effect.
 
-_Previous attempts using simpler commands or shell wrappers failed due to issues with Cursor's process execution environment on Linux. The direct `uv run` approach with absolute paths is the configuration proven to work._
+_Previous integration attempts using different methods (like `uv run` or shell wrappers) failed due to issues with Cursor's process execution environment on Linux. The direct `python -m` approach using the project's own virtual environment is the configuration proven to work._
 
 ## Adding New Tools
 
