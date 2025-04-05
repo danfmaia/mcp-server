@@ -1,6 +1,6 @@
 # Plan: Add Project-Wide and Config-Based Link Scanning
 
-**Status:** Proposed
+**Status:** Part 1 Complete
 
 **Goal:** Enhance the link checker tools with two new functionalities:
 
@@ -49,7 +49,7 @@
 
 **Final Steps**
 
-15. `[ ]` **Final Checks:** Run `make lint` and `make test` to ensure everything passes.
+15. `[X]` **Final Checks:** Run `make lint` and `make test` to ensure everything passes.
 16. `[ ]` **Mark Plan Complete:** Update the status of this plan file.
 
-**Next Step:** Proceed with Part 1, Step 7: Agent Test.
+**Next Step:** Proceed with Part 2, Step 8: Define configuration format.

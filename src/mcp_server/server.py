@@ -297,7 +297,7 @@ async def handle_call_tool(
         if gitignore_path.is_file():
             try:
                 # Read .gitignore content
-                with open(gitignore_path, 'r', encoding='utf-8') as f:
+                with open(gitignore_path, encoding='utf-8') as f:
                     gitignore_content = f.read()
                 # Create pathspec from .gitignore lines using gitwildmatch style
                 spec = pathspec.PathSpec.from_lines(

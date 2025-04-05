@@ -1,13 +1,12 @@
-import pathspec  # Import pathspec for mocking
-from mcp_server.server import (
-    handle_list_tools, handle_call_tool, _check_single_file
-)
+import sys
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch, mock_open
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import mcp.types as types
+import pathspec  # Import pathspec for mocking
 import pytest
-import sys
+
+from mcp_server.server import _check_single_file, handle_call_tool, handle_list_tools
 
 # Ensure src directory is in path for imports if running tests directly
 sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
@@ -656,7 +655,7 @@ async def test_handle_call_tool_directory_target_does_not_exist(mock_exists):
 @pytest.mark.parametrize("anyio_backend", ["asyncio", "trio"])
 @patch("mcp_server.server._check_single_file", new_callable=AsyncMock)
 @patch("pathspec.PathSpec.from_lines")  # Mock pathspec loading
-@patch("aiofiles.open", new_callable=mock_open)  # Mock async file open
+@patch("aiofiles.open")
 # Mock relative_to method WITH AUTOSPEC
 @patch("pathlib.Path.relative_to", autospec=True)
 @patch("pathlib.Path.rglob")  # Mock rglob method
@@ -860,3 +859,67 @@ async def test_handle_call_tool_project_gitignore_parse_error_pathspec(
     # assert "Broken Links: 1" in report_text
     # assert "Errored Links: 0" in report_text
     # assert "- http://path2.com (Reason: 404)" in report_text
+
+
+# --- Tests for _check_single_file helper ---
+
+@pytest.mark.anyio
+@patch("aiofiles.open")
+@patch("mcp_server.server.check_links_in_content")
+async def test__check_single_file_success(mock_check_links, mock_aio_open):
+    """Test _check_single_file successfully reads, checks, and returns results."""
+    mock_path = Path("/fake/path.md")
+    read_data = "[Test](http://link.com)"
+    expected_results = {"total": 1, "valid": [
+        "http://link.com"], "broken": [], "errors": []}
+    mock_check_links.return_value = expected_results
+
+    # 1. Create the mock file handle
+    mock_file_handle = AsyncMock()
+    mock_file_handle.read = AsyncMock(return_value=read_data)
+
+    # 2. Create the mock context manager
+    mock_context_manager = AsyncMock()
+    mock_context_manager.__aenter__.return_value = mock_file_handle
+    mock_context_manager.__aexit__.return_value = None
+
+    # 3. Configure the *patched function mock* (mock_aio_open)
+    #    to return the context manager mock when called.
+    mock_aio_open.return_value = mock_context_manager
+
+    result = await _check_single_file(mock_path)
+
+    mock_aio_open.assert_called_once_with(mock_path, encoding='utf-8')
+    mock_check_links.assert_called_once_with(read_data)
+    assert result == expected_results
+
+
+@pytest.mark.anyio
+@patch("aiofiles.open")
+@patch("mcp_server.server.check_links_in_content")
+async def test__check_single_file_returns_error_results(mock_check_links, mock_aio_open):
+    """Test _check_single_file returns results dict even if link check had errors."""
+    mock_path = Path("/fake/errors.md")
+    read_data = "[Err](http://err.com)"
+    error_results = {'total': 1, 'valid': [], 'broken': [], 'errors': [
+        {'url': 'http://err.com', 'reason': 'Timeout'}]}
+    mock_check_links.return_value = error_results
+
+    # 1. Create the mock file handle
+    mock_file_handle = AsyncMock()
+    mock_file_handle.read = AsyncMock(return_value=read_data)
+
+    # 2. Create the mock context manager
+    mock_context_manager = AsyncMock()
+    mock_context_manager.__aenter__.return_value = mock_file_handle
+    mock_context_manager.__aexit__.return_value = None
+
+    # 3. Configure the *patched function mock* (mock_aio_open)
+    #    to return the context manager mock when called.
+    mock_aio_open.return_value = mock_context_manager
+
+    result = await _check_single_file(mock_path)
+
+    mock_aio_open.assert_called_once_with(mock_path, encoding='utf-8')
+    mock_check_links.assert_called_once_with(read_data)
+    assert result == error_results
