@@ -13,11 +13,11 @@ pytestmark = pytest.mark.asyncio
 
 
 async def test_handle_list_tools_returns_correct_tool():
-    """Verify that handle_list_tools returns the expected tool definition."""
+    """Verify that handle_list_tools returns the expected tool definitions."""
     tools = await handle_list_tools()
     assert isinstance(tools, list)
-    # Expect 3 tools now
-    assert len(tools) == 3
+    # Expect 4 tools now
+    assert len(tools) == 4
 
     # Verify Tool 1: check_markdown_link_file
     tool1 = tools[0]
@@ -66,6 +66,17 @@ async def test_handle_list_tools_returns_correct_tool():
             }
         },
         "required": ["directory_path"],
+    }
+
+    # Verify Tool 4: check_markdown_links_project
+    tool4 = tools[3]
+    assert isinstance(tool4, types.Tool)
+    assert tool4.name == "check_markdown_links_project"
+    assert tool4.description == "Checks HTTP/HTTPS links in all project *.md files, respecting .gitignore."
+    assert tool4.inputSchema == {
+        "type": "object",
+        "properties": {},
+        # No arguments required
     }
 
 
@@ -118,7 +129,7 @@ async def test_handle_call_tool_file_success(mock_check_links, mock_aio_open):
 
     # Assert
     mock_aio_open.assert_called_once_with(
-        absolute_path.resolve(), encoding='utf-8')
+        str(absolute_path.resolve()), encoding='utf-8')
     mock_check_links.assert_called_once_with(mock_content)
     assert isinstance(result, list)
     assert len(result) == 1
@@ -175,7 +186,8 @@ async def test_handle_call_tool_file_other_exception(mock_aio_open):
     assert len(result) == 1
     assert isinstance(result[0], types.TextContent)
     # Check the specific error message from the handler
-    assert f"Error processing file: {mock_file_path_str} - Reason: PermissionError" in result[0].text
+    expected_error_reason = f"Error during link check for {str(Path('/home/danfmaia/_repos/mcp-server/unreadable/path.md').resolve())}: PermissionError (central)"
+    assert f"Error processing file: {mock_file_path_str} - Reason: {expected_error_reason}" in result[0].text
 
 
 # --- Tests for report formatting (can be adapted or removed if helpers are tested separately) ---
@@ -239,11 +251,10 @@ async def test_handle_call_tool_files_success(mock_check_links, mock_aio_open):
     mock_file2_ctx.__aenter__.return_value.read.return_value = content2
 
     def open_side_effect(path_arg, *args, **kwargs):
-        # path_arg here should be a Path object
-        resolved_path = path_arg  # Assume already resolved by handler
-        if resolved_path == abs_path1.resolve():
+        # Centralized logic passes the *string* of the resolved path
+        if path_arg == str(abs_path1.resolve()):
             return mock_file1_ctx
-        elif resolved_path == abs_path2.resolve():
+        elif path_arg == str(abs_path2.resolve()):
             return mock_file2_ctx
         raise FileNotFoundError(f"Mock file not found: {path_arg}")
 
@@ -266,10 +277,9 @@ async def test_handle_call_tool_files_success(mock_check_links, mock_aio_open):
 
     # Assert
     assert mock_aio_open.call_count == 2
-    # Check calls with resolved paths
-    mock_aio_open.assert_any_call(abs_path1.resolve(), encoding='utf-8')
-    mock_aio_open.assert_any_call(abs_path2.resolve(), encoding='utf-8')
-
+    # Check calls with resolved path strings
+    mock_aio_open.assert_any_call(str(abs_path1.resolve()), encoding='utf-8')
+    mock_aio_open.assert_any_call(str(abs_path2.resolve()), encoding='utf-8')
     assert mock_check_links.call_count == 2
     mock_check_links.assert_any_call(content1)
     mock_check_links.assert_any_call(content2)
@@ -347,16 +357,17 @@ async def test_handle_call_tool_directory_success(mock_exists, mock_is_dir, mock
     results2 = {'total': 2, 'valid': ['http://dir2.com'], 'broken': [
         {'url': 'http://broken-dir.com', 'reason': '500 Error'}], 'errors': []}
 
-    # Mock aiofiles.open based on the mock path objects
+    # Mock aiofiles.open based on the mock path objects' string representation
     mock_file1_ctx = AsyncMock()
     mock_file1_ctx.__aenter__.return_value.read.return_value = file1_content
     mock_file2_ctx = AsyncMock()
     mock_file2_ctx.__aenter__.return_value.read.return_value = file2_content
 
     def open_side_effect(path_arg, *args, **kwargs):
-        if path_arg == mock_returned_path1:
+        # Centralized logic passes the *string* of the resolved path
+        if path_arg == str(abs_mock_path1):
             return mock_file1_ctx
-        elif path_arg == mock_returned_path2:
+        elif path_arg == str(abs_mock_path2):
             return mock_file2_ctx
         raise FileNotFoundError(f"Mock file not found for: {path_arg}")
     mock_aio_open.side_effect = open_side_effect
@@ -387,8 +398,9 @@ async def test_handle_call_tool_directory_success(mock_exists, mock_is_dir, mock
     mock_returned_path2.is_file.assert_called_once()
 
     assert mock_aio_open.call_count == 2
-    mock_aio_open.assert_any_call(mock_returned_path1, encoding='utf-8')
-    mock_aio_open.assert_any_call(mock_returned_path2, encoding='utf-8')
+    # Assert calls with string representation of the resolved path
+    mock_aio_open.assert_any_call(str(abs_mock_path1), encoding='utf-8')
+    mock_aio_open.assert_any_call(str(abs_mock_path2), encoding='utf-8')
 
     assert mock_check_links.call_count == 2
     mock_check_links.assert_any_call(file1_content)
@@ -467,3 +479,299 @@ async def test_handle_call_tool_directory_empty(mock_exists, mock_is_dir, mock_r
     assert len(result) == 1
     assert isinstance(result[0], types.TextContent)
     assert f"No Markdown files found in directory: {dir_path_arg}" in result[0].text
+
+
+# --- Tests for check_markdown_links_project ---
+
+@pytest.mark.anyio
+@patch('mcp_server.server.gitignore_parser')  # Target module where imported
+@patch('mcp_server.server.check_links_in_content')
+@patch('aiofiles.open')
+@patch('builtins.open')  # Mock reading .gitignore
+@patch('pathlib.Path.rglob')
+# Mock is_file for rglob results AND gitignore check
+@patch('pathlib.Path.is_file')
+async def test_handle_call_tool_project_success_no_ignore(
+    mock_path_is_file, mock_rglob, mock_builtin_open, mock_aio_open, mock_check_links, mock_gitignore_parser
+):
+    """Test project scan finds and processes files when no .gitignore applies."""
+    # Arrange
+    project_root = Path("/home/danfmaia/_repos/mcp-server")
+    gitignore_path = project_root / ".gitignore"
+
+    # Mock is_file to return True for the .gitignore check
+    mock_path_is_file.return_value = True
+
+    # Simulate .gitignore open returning some content
+    mock_gitignore_handle = MagicMock()
+    mock_gitignore_handle.read.return_value = "# A comment"
+    # Configure open to return this handle ONLY for the .gitignore path
+    mock_context = MagicMock()
+    mock_context.__enter__.return_value = mock_gitignore_handle
+    mock_context.__exit__.return_value = None
+    mock_builtin_open.return_value = mock_context  # Simplified mock setup
+
+    # Mock gitignore_parser.parse to return a function that matches nothing
+    # Configure the parse attribute on the mocked module
+    mock_gitignore_parser.parse.return_value = lambda _: False
+
+    # Files rglob should find
+    path1 = project_root / "file1.md"
+    path2 = project_root / "docs/plan.md"
+
+    # Mock rglob results - return real Path objects
+    mock_rglob.return_value = [path1, path2]
+
+    # Mock aiofiles.open based on the resolved paths
+    content1 = "[LinkA](http://a.com)"
+    content2 = "[LinkB](http://b.com)"
+    results1 = {'total': 1, 'valid': [
+        'http://a.com'], 'broken': [], 'errors': []}
+    results2 = {'total': 1, 'valid': [
+        'http://b.com'], 'broken': [], 'errors': []}
+
+    mock_ctx1 = AsyncMock()
+    mock_ctx1.__aenter__.return_value.read.return_value = content1
+    mock_ctx2 = AsyncMock()
+    mock_ctx2.__aenter__.return_value.read.return_value = content2
+
+    def aio_open_side_effect(p, *args, **kwargs):
+        # Use resolve() for robust comparison
+        resolved_p = Path(p).resolve()
+        if resolved_p == path1.resolve():
+            return mock_ctx1
+        if resolved_p == path2.resolve():
+            return mock_ctx2
+        raise FileNotFoundError(f"Mock aiofiles not found: {p}")
+    mock_aio_open.side_effect = aio_open_side_effect
+
+    def check_links_side_effect(c):
+        if c == content1:
+            return results1
+        if c == content2:
+            return results2
+        return {'total': 0, 'valid': [], 'broken': [], 'errors': []}
+    mock_check_links.side_effect = check_links_side_effect
+
+    # Act
+    result = await handle_call_tool(name="check_markdown_links_project", arguments={})
+
+    # Assert
+    mock_builtin_open.assert_called_once_with(gitignore_path, 'r')
+    mock_gitignore_parser.parse.assert_called_once()
+    mock_rglob.assert_called_once_with("*.md")
+    # is_file call count is difficult to assert reliably here, removed.
+    assert mock_aio_open.call_count == 2
+    mock_aio_open.assert_any_call(path1, encoding='utf-8')
+    mock_aio_open.assert_any_call(path2, encoding='utf-8')
+    mock_check_links.assert_any_call(content1)
+    mock_check_links.assert_any_call(content2)
+    # Check report details (adjust based on actual formatting)
+    # Project scan now returns dict {"report": ...}
+    assert "Files Processed (2):" in result["report"]
+    assert "file1.md" in result["report"]
+    assert "docs/plan.md" in result["report"]
+    assert "Total Links Found: 2" in result["report"]
+
+
+@pytest.mark.anyio
+@patch('mcp_server.server.gitignore_parser')  # Target module where imported
+@patch('mcp_server.server.check_links_in_content')
+@patch('aiofiles.open')
+@patch('builtins.open')
+@patch('pathlib.Path.rglob')
+@patch('pathlib.Path.is_file')
+async def test_handle_call_tool_project_with_ignore(
+    mock_path_is_file, mock_rglob, mock_builtin_open, mock_aio_open, mock_check_links, mock_gitignore_parser
+):
+    """Test project scan respects .gitignore rules."""
+    # Arrange
+    project_root = Path("/home/danfmaia/_repos/mcp-server")
+    gitignore_path = project_root / ".gitignore"
+    kept_path = project_root / "docs/real.md"
+    ignored_path = project_root / "ignored/ignore_me.md"
+
+    # Mock is_file to return True for the .gitignore check
+    mock_path_is_file.return_value = True
+
+    # Simulate .gitignore open returning some content
+    mock_gitignore_handle = MagicMock()
+    # Ignore the ignored/ directory
+    mock_gitignore_handle.read.return_value = "ignored/"
+    mock_context = MagicMock()
+    mock_context.__enter__.return_value = mock_gitignore_handle
+    mock_context.__exit__.return_value = None
+    mock_builtin_open.return_value = mock_context  # Simplified mock setup
+
+    # Mock the 'matches' function returned by parse
+    def mock_matches(filepath_str):
+        # Check if the absolute path string starts with the ignored directory path string
+        return Path(filepath_str).resolve() == ignored_path.resolve()
+
+    mock_gitignore_parser.parse.return_value = mock_matches
+
+    # Mock rglob results
+    mock_rglob.return_value = [kept_path, ignored_path]
+
+    # Mock aiofiles.open only for the kept file
+    content_kept = "[KeptLink](http://kept.com)"
+    results_kept = {'total': 1, 'valid': [
+        'http://kept.com'], 'broken': [], 'errors': []}
+    mock_ctx_kept = AsyncMock()
+    mock_ctx_kept.__aenter__.return_value.read.return_value = content_kept
+
+    def aio_open_side_effect(p, *args, **kwargs):
+        if Path(p).resolve() == kept_path.resolve():
+            return mock_ctx_kept
+        raise FileNotFoundError(
+            f"Mock aiofiles should not be called for ignored file: {p}")
+    mock_aio_open.side_effect = aio_open_side_effect
+
+    mock_check_links.return_value = results_kept  # Only called for kept file
+
+    # Act
+    result = await handle_call_tool(name="check_markdown_links_project", arguments={})
+
+    # Assert
+    mock_builtin_open.assert_called_once_with(gitignore_path, 'r')
+    mock_gitignore_parser.parse.assert_called_once()
+    mock_rglob.assert_called_once_with("*.md")
+    # is_file call count is difficult to assert reliably here, removed.
+    # aio_open only called for kept_path
+    mock_aio_open.assert_called_once_with(kept_path, encoding='utf-8')
+    mock_check_links.assert_called_once_with(content_kept)
+    # Check report details
+    # Only processed the kept file
+    # Project scan now returns dict {"report": ...}
+    assert "Files Processed (1):" in result["report"]
+    assert "docs/real.md" in result["report"]
+    assert "ignored/ignore_me.md" not in result["report"]
+    assert "Total Links Found: 1" in result["report"]
+
+
+@pytest.mark.anyio
+# No need to mock gitignore_parser if .gitignore isn't found
+@patch('builtins.open')
+@patch('pathlib.Path.rglob')
+@patch('pathlib.Path.is_file')
+async def test_handle_call_tool_project_none_found(
+    mock_path_is_file, mock_rglob, mock_builtin_open
+):
+    """Test project scan when rglob finds no md files and no .gitignore."""  # Updated docstring
+    # Arrange
+    project_root = Path("/home/danfmaia/_repos/mcp-server")
+    gitignore_path = project_root / ".gitignore"
+
+    # is_file needs to return False for .gitignore
+    mock_path_is_file.return_value = False
+
+    # Simulate no .gitignore found by open - this mock shouldn't actually be hit
+    mock_builtin_open.side_effect = FileNotFoundError
+
+    # rglob finds nothing
+    mock_rglob.return_value = []
+
+    # Act
+    result = await handle_call_tool(name="check_markdown_links_project", arguments={})
+
+    # Assert
+    # If is_file(gitignore_path) is False, open should NOT be called.
+    mock_builtin_open.assert_not_called()
+    # is_file should only be called once for the .gitignore check
+    mock_path_is_file.assert_called_once()
+    mock_rglob.assert_called_once_with("*.md")
+    # Check the specific report message for no files found
+    assert result["report"] == "No processable Markdown files found."
+
+# --- Tests for Argument Validation and Path Errors ---
+
+
+@pytest.mark.anyio
+async def test_handle_call_tool_files_invalid_argument_type():
+    """Test ValueError is raised if file_paths is not a list."""
+    with pytest.raises(ValueError, match="Argument 'file_paths' must be a list of strings."):
+        await handle_call_tool(
+            name="check_markdown_link_files",
+            # Pass string instead of list
+            arguments={"file_paths": "not_a_list"}
+        )
+
+
+@pytest.mark.anyio
+@patch('pathlib.Path.exists', return_value=True)
+# Mock as existing but not a dir
+@patch('pathlib.Path.is_dir', return_value=False)
+async def test_handle_call_tool_directory_target_is_file(mock_is_dir, mock_exists):
+    """Test ValueError is raised if directory_path target is a file."""
+    dir_path_arg = "dummy/path_is_file.md"
+    with pytest.raises(ValueError, match=f"Path is not a directory: {dir_path_arg}"):
+        await handle_call_tool(
+            name="check_markdown_link_directory",
+            arguments={"directory_path": dir_path_arg}
+        )
+    # Verify mocks were called on the resolved path instance
+    # The actual path doesn't matter as much as verifying the checks were done
+    mock_exists.assert_called_once()
+    mock_is_dir.assert_called_once()
+
+
+@pytest.mark.anyio
+@patch('pathlib.Path.exists', return_value=False)  # Mock as not existing
+async def test_handle_call_tool_directory_target_does_not_exist(mock_exists):
+    """Test ValueError is raised if directory_path target does not exist."""
+    dir_path_arg = "dummy/non_existent_dir"
+    with pytest.raises(ValueError, match=f"Directory target does not exist: {dir_path_arg}"):
+        await handle_call_tool(
+            name="check_markdown_link_directory",
+            arguments={"directory_path": dir_path_arg}
+        )
+    mock_exists.assert_called_once()
+
+
+@pytest.mark.anyio
+@patch('mcp_server.server.gitignore_parser')
+@patch('builtins.open')
+@patch('pathlib.Path.rglob')
+# Assume .gitignore and md files exist
+@patch('pathlib.Path.is_file', return_value=True)
+async def test_handle_call_tool_project_gitignore_parse_error(
+    mock_path_is_file, mock_rglob, mock_builtin_open, mock_gitignore_parser
+):
+    """Test project scan handles gitignore parsing errors gracefully."""
+    # Arrange
+    project_root = Path("/home/danfmaia/_repos/mcp-server")
+    gitignore_path = project_root / ".gitignore"
+    path1 = project_root / "file1.md"
+    path2 = project_root / "docs/plan.md"
+
+    # Mock open for .gitignore
+    mock_gitignore_handle = MagicMock()
+    mock_context = MagicMock()
+    mock_context.__enter__.return_value = mock_gitignore_handle
+    mock_context.__exit__.return_value = None
+    mock_builtin_open.return_value = mock_context
+
+    # Mock gitignore_parser.parse to raise an error
+    mock_gitignore_parser.parse.side_effect = Exception("Mock parse error")
+
+    # Mock rglob to find files (these should be processed as ignore failed)
+    mock_rglob.return_value = [path1, path2]
+
+    # Mock the check_single_file internals (not strictly necessary for this test focus)
+    # but prevents needing aio_open/check_links mocks
+    with patch('mcp_server.server._check_single_file', new_callable=AsyncMock) as mock_check_single:
+        mock_check_single.return_value = {
+            'total': 0, 'valid': [], 'broken': [], 'errors': []}
+
+        # Act
+        result = await handle_call_tool(name="check_markdown_links_project", arguments={})
+
+    # Assert
+    mock_builtin_open.assert_called_once_with(gitignore_path, 'r')
+    mock_gitignore_parser.parse.assert_called_once()  # Should still be called
+    mock_rglob.assert_called_once_with("*.md")
+    # Since parse failed, no filtering should happen, both files processed
+    assert mock_check_single.call_count == 2
+    # Check that the report indicates processing happened (no specific content check needed)
+    assert "Project Scan (respecting .gitignore)" in result["report"]
+    assert "Files Processed (2):" in result["report"]

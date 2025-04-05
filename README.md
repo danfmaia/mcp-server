@@ -48,6 +48,16 @@ The server currently offers the following tools, callable via the `call_tool` en
   ```
 - **Output:** A consolidated text report summarizing the link status across all Markdown files found in the directory.
 
+### `check_markdown_links_project`
+
+- **Description:** Scans the entire project for `*.md` files, excluding those listed in the root `.gitignore` file, and checks HTTP/HTTPS links within the remaining files.
+- **Arguments:** None.
+- **Example `arguments`:**
+  ```json
+  {}
+  ```
+- **Output:** A consolidated text report summarizing the link status across all processed Markdown files found in the project (respecting `.gitignore`).
+
 ## Setup & Usage (Using Makefile)
 
 This project uses `uv` for environment and dependency management, orchestrated via a `Makefile`.

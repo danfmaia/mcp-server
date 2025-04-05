@@ -11,6 +11,7 @@ dependencies = [
     "beautifulsoup4",
     "aiohttp>=3.9.0",
     "aiofiles",
+    "gitignore-parser>=0.1.9",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -82,4 +83,13 @@ indent-style = "space"
 # Like Black, respect magic trailing commas.
 skip-magic-trailing-comma = false
 # Like Black, automatically detect the appropriate line ending.
-line-ending = "auto" 
+line-ending = "auto"
+
+[tool.uv.sources]
+mcp-sdk = { git = "https://github.com/modelcontext/mcp-sdk", rev = "v0.2.1" }
+# Standard dependencies below are fetched from PyPI via [project.dependencies]
+# aiofiles = "*"
+# aiohttp = "*"
+# markdown-it-py = "*"
+# gitignore-parser = "*"
+# pytest = "*" 

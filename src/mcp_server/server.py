@@ -11,6 +11,7 @@ import mcp.server.stdio
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
+import gitignore_parser  # Added import
 
 from .tools.link_checker import check_links_in_content
 
@@ -137,6 +138,32 @@ def _format_consolidated_report(report_source_info, results_list, processed_file
             result_text += _format_link_report_details(link_results)
     return result_text
 
+# --- Helper Function for Single File Check ---
+
+
+async def _check_single_file(file_path: Path) -> dict | str:
+    """Asynchronously checks links in a single file, returns results or error string."""
+    file_path_str = str(file_path)
+    try:
+        logger.info(f"Checking links in file: {file_path_str}")
+        async with aiofiles.open(file_path, encoding='utf-8') as f:
+            content = await f.read()
+        logger.info(f"Read {len(content)} bytes from {file_path_str}")
+        # Perform link checking
+        link_results = await check_links_in_content(content)
+        logger.info(
+            f"Link checking completed for {file_path_str}. Results: {link_results}")
+        return link_results  # Return results dictionary
+    except FileNotFoundError:
+        error_msg = f"File not found at {file_path_str}"
+        logger.error(f"Error: {error_msg}")
+        return error_msg  # Return error string
+    except Exception as e:
+        error_msg = f"Error during link check for {file_path_str}: {e.__class__.__name__}"
+        logger.exception(
+            f"Error during link check for {file_path_str}")  # Log full traceback
+        return error_msg  # Return error string
+
 # --- Tool Definitions ---
 
 
@@ -144,8 +171,8 @@ def _format_consolidated_report(report_source_info, results_list, processed_file
 async def handle_list_tools() -> list[types.Tool]:
     """List available tools."""
     logger.info("Handling list_tools request")
-    return [
-        # Tool 1: Single File
+    # Define the tools provided by this server
+    tools = [
         types.Tool(
             name="check_markdown_link_file",
             description="Checks HTTP/HTTPS links in a single Markdown file.",
@@ -154,13 +181,12 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {
                     "file_path": {
                         "type": "string",
-                        "description": "Path to the single Markdown file."
+                        "description": "Path to the single Markdown file.",
                     }
                 },
                 "required": ["file_path"],
             },
         ),
-        # Tool 2: List of Files
         types.Tool(
             name="check_markdown_link_files",
             description="Checks HTTP/HTTPS links in a list of Markdown files.",
@@ -170,13 +196,12 @@ async def handle_list_tools() -> list[types.Tool]:
                     "file_paths": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "description": "List of paths to specific Markdown files."
+                        "description": "List of paths to specific Markdown files.",
                     }
                 },
                 "required": ["file_paths"],
             },
         ),
-        # Tool 3: Directory
         types.Tool(
             name="check_markdown_link_directory",
             description="Checks HTTP/HTTPS links in all *.md files within a directory (recursively).",
@@ -185,13 +210,23 @@ async def handle_list_tools() -> list[types.Tool]:
                 "properties": {
                     "directory_path": {
                         "type": "string",
-                        "description": "Path to the directory to scan."
+                        "description": "Path to the directory to scan.",
                     }
                 },
                 "required": ["directory_path"],
             },
         ),
+        types.Tool(
+            name="check_markdown_links_project",
+            description="Checks HTTP/HTTPS links in all project *.md files, respecting .gitignore.",
+            inputSchema={
+                "type": "object",
+                "properties": {},
+                # No arguments required
+            },
+        ),
     ]
+    return tools
 
 
 @server.call_tool()
@@ -199,25 +234,24 @@ async def handle_call_tool(
     name: str, arguments: dict | None
 ) -> list[
     types.TextContent | types.ImageContent | types.EmbeddedResource
-]:
+] | dict:  # Allow dict return for project scan
     """Handle tool execution requests."""
     logger.info(f"Handling call_tool request for tool: {name}")
 
     # Define project root for path resolution
     PROJECT_ROOT = Path("/home/danfmaia/_repos/mcp-server")
 
-    results_list = []
-    processed_files = []
-    error_files = {}
-    report_source_info = f"Tool: {name}"  # Default source info
+    # Initialize variables used by multiple branches
+    paths_to_process = []
+    report_source_info = f"Tool: {name}"
+
+    # --- Logic specific to each tool type ---
 
     if name == "check_markdown_link_file":
         if not arguments or "file_path" not in arguments:
             raise ValueError("Missing required argument: file_path")
         file_path_str = arguments["file_path"]
-        # Resolve path relative to project root
-        file_path_resolved = (PROJECT_ROOT / file_path_str).resolve()
-        paths_to_process = [file_path_resolved]
+        paths_to_process = [(PROJECT_ROOT / file_path_str).resolve()]
         report_source_info = f"File: {file_path_str}"
 
     elif name == "check_markdown_link_files":
@@ -227,88 +261,149 @@ async def handle_call_tool(
         if not isinstance(file_paths_list, list):
             raise ValueError(
                 "Argument 'file_paths' must be a list of strings.")
-        # Resolve paths relative to project root
-        paths_to_process = [
-            (PROJECT_ROOT / p).resolve() for p in file_paths_list
-        ]
+        paths_to_process = [(PROJECT_ROOT / p).resolve()
+                            for p in file_paths_list]
+        # Report original paths provided by the user
         report_source_info = f"Files Processed ({len(paths_to_process)}):\n" + "\n".join(
-            f"  - {p}" for p in file_paths_list)  # Report original paths
+            f"  - {p}" for p in file_paths_list)
 
     elif name == "check_markdown_link_directory":
         if not arguments or "directory_path" not in arguments:
             raise ValueError("Missing required argument: directory_path")
         directory_path_str = arguments["directory_path"]
-        # Resolve the directory path relative to PROJECT_ROOT
         scan_dir = (PROJECT_ROOT / directory_path_str).resolve()
-        # Log resolved path
         logger.info(f"Checking resolved path for directory: {scan_dir}")
         if not scan_dir.exists():
-            logger.error(f"Resolved path does not exist: {scan_dir}")
+            logger.error(f"Directory path does not exist: {scan_dir}")
             raise ValueError(
                 f"Directory target does not exist: {directory_path_str}")
         if not scan_dir.is_dir():
-            logger.error(
-                f"Resolved path exists but is not a directory: {scan_dir}")
+            logger.error(f"Path is not a directory: {scan_dir}")
             raise ValueError(f"Path is not a directory: {directory_path_str}")
         logger.info(f"Scanning directory recursively: {scan_dir}")
-        paths_to_process = [
-            p for p in scan_dir.rglob('*.md') if p.is_file()]
+        paths_to_process = [p for p in scan_dir.rglob('*.md') if p.is_file()]
         logger.info(
             f"Found {len(paths_to_process)} Markdown files to process.")
         report_source_info = f"Directory Scanned: {directory_path_str}"
         if not paths_to_process:
+            # Return TextContent list even for no files found in directory
             return [types.TextContent(type="text", text=f"No Markdown files found in directory: {directory_path_str}")]
+
+    elif name == "check_markdown_links_project":
+        report_source_info = "Project Scan (respecting .gitignore)"
+        gitignore_path = PROJECT_ROOT / ".gitignore"
+        matches = None
+        if gitignore_path.is_file():
+            try:
+                with open(gitignore_path, 'r') as f:
+                    matches = gitignore_parser.parse(f)
+                logger.info(f"Loaded .gitignore rules from: {gitignore_path}")
+            except Exception as e:
+                logger.warning(f"Could not parse .gitignore: {e}")
+        else:
+            logger.info("No .gitignore file found at project root.")
+
+        logger.info(
+            f"Scanning project root recursively for *.md files: {PROJECT_ROOT}")
+        all_files = list(PROJECT_ROOT.rglob("*.md"))
+        logger.info(
+            f"Found {len(all_files)} total Markdown files before filtering.")
+
+        filtered_files = []
+        if matches:
+            for f in all_files:
+                # Check if it's a file AND doesn't match gitignore
+                if f.is_file() and not matches(str(f.resolve())):
+                    filtered_files.append(f)
+        else:
+            for f in all_files:
+                if f.is_file():
+                    filtered_files.append(f)
+
+        logger.info(
+            f"Processing {len(filtered_files)} Markdown files after filtering.")
+
+        if not filtered_files:
+            return {"report": "No processable Markdown files found."}
+
+        tasks = [asyncio.create_task(_check_single_file(file))
+                 for file in filtered_files]
+        file_results_list = await asyncio.gather(*tasks)
+
+        results_list = [
+            res for res in file_results_list if isinstance(res, dict)]
+        error_files = {str(file): reason for file, reason in zip(
+            filtered_files, file_results_list) if isinstance(reason, str)}
+        # Use filtered_files (Path objects) for reporting file names
+        processed_files_paths = [f for f, res in zip(
+            filtered_files, file_results_list) if isinstance(res, dict)]
+        # Report relative paths from PROJECT_ROOT for readability
+        processed_files_rel_str = [
+            str(p.relative_to(PROJECT_ROOT)) for p in processed_files_paths]
+
+        report = _format_consolidated_report(
+            report_source_info, results_list, processed_files_rel_str, error_files
+        )
+        # return {"report": report}  # Return dict for project scan
+        # Return the formatted report wrapped in TextContent list for consistency
+        return [types.TextContent(type="text", text=report)]
 
     else:
         logger.error(f"Unknown tool requested: {name}")
         raise ValueError(f"Unknown tool: {name}")
 
-    # --- Centralized File Processing Logic ---
+    # --- Centralized Processing for file/files/directory tools ---
+    # This block only runs if paths_to_process was populated above
+    # and the tool wasn't check_markdown_links_project (it exited above)
+    results_list_central = []
+    processed_files_central = []
+    error_files_central = {}
     for file_path in paths_to_process:
-        current_path_str = str(file_path)
-        # Default, maybe map back later if complex
-        # original_path_repr = current_path_str # Removed: Unused variable
-        # (For simplicity, we'll use the resolved path string in reports for now)
-        logger.info(f"Checking links in file: {current_path_str}")
+        # Report the original path if it was a single file check, else the resolved one
+        file_path_str_for_report = arguments.get("file_path", str(
+            file_path)) if name == "check_markdown_link_file" else str(file_path)
+        # Always use resolved for processing
+        file_path_str_for_processing = str(file_path)
+
         try:
-            async with aiofiles.open(file_path, encoding='utf-8') as f:
+            logger.info(
+                f"Checking links in file (central): {file_path_str_for_processing}")
+            async with aiofiles.open(file_path_str_for_processing, encoding='utf-8') as f:
                 content = await f.read()
-            logger.info(f"Read {len(content)} bytes from {current_path_str}")
+            logger.info(
+                f"Read {len(content)} bytes from {file_path_str_for_processing} (central)")
             link_results = await check_links_in_content(content)
             logger.info(
-                f"Link checking completed for {current_path_str}. "
-                f"Results: {link_results}")
-            results_list.append(link_results)
-            processed_files.append(current_path_str)  # Report resolved path
-
+                f"Link checking completed for {file_path_str_for_processing}. Results: {link_results} (central)")
+            results_list_central.append(link_results)
+            processed_files_central.append(file_path_str_for_report)
         except FileNotFoundError:
-            err_msg = f"Error: File not found at {current_path_str}"
-            logger.error(err_msg)
-            error_files[current_path_str] = "File not found"
+            error_msg = f"File not found at {file_path_str_for_processing}"
+            logger.error(f"Error: {error_msg} (central)")
+            # Report error against original path
+            error_files_central[file_path_str_for_report] = error_msg
         except Exception as e:
-            err_msg = (
-                f"Error processing file {current_path_str}: "
-                f"{type(e).__name__} - {e}")
+            error_msg = f"Error during link check for {file_path_str_for_processing}: {e.__class__.__name__} (central)"
             logger.exception(
-                f"Error during link check for {current_path_str}")
-            error_files[current_path_str] = f"{type(e).__name__}"
+                f"Error during link check for {file_path_str_for_processing} (central)")
+            # Report error against original path
+            error_files_central[file_path_str_for_report] = error_msg
 
-    # --- Format the Report (Use existing helpers) ---
-    if name == "check_markdown_link_file":
-        # For single file, report based on original input path if possible
-        input_path = arguments.get("file_path", "")
-        result_text = _format_single_file_report(
-            input_path, results_list, error_files)
-    else:  # Consolidated report for list or directory
-        result_text = _format_consolidated_report(
-            report_source_info, results_list, processed_files, error_files)
-
-    return [
-        types.TextContent(
-            type="text",
-            text=result_text.strip(),
+    # --- Format Report for file/files/directory tools ---
+    if len(paths_to_process) == 1 and name == "check_markdown_link_file":
+        report = _format_single_file_report(
+            arguments.get("file_path", ""),  # Use original path for report
+            results_list_central, error_files_central)
+    else:
+        # report_source_info already contains the list of original paths for 'files'
+        # or the directory path for 'directory'
+        report = _format_consolidated_report(
+            report_source_info, results_list_central, processed_files_central, error_files_central
         )
-    ]
+
+    # Return the formatted report wrapped in TextContent list
+    return [types.TextContent(type="text", text=report)]
+
 
 # --- Main Server Loop ---
 
