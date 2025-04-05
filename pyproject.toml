@@ -1,0 +1,85 @@
+[project]
+name = "mcp_server"
+version = "0.1.0"
+description = "MCP Server providing tools for AI agents (initially link checker)"
+authors = [
+    { name = "Dan Maia", email = "your@email.com" }, # TODO: Update email if desired
+]
+dependencies = [
+    "mcp>=1.6.0",
+    "markdown-it-py>=3.0.0",
+    "beautifulsoup4",
+    "aiohttp>=3.9.0",
+    "aiofiles",
+]
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "MIT" }
+
+[project.optional-dependencies]
+test = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+    "pytest-mock>=3.10.0",
+    "aiohttp>=3.9.0",
+    "aioresponses>=0.7.0",
+    "pytest-cov>=4.0.0",
+    # Add mocking libraries like pytest-mock or unittest.mock if needed later
+]
+
+[build-system]
+requires = ["pdm-backend"]
+build-backend = "pdm.backend"
+
+[project.scripts]
+mcp_server = "mcp_server.server:run_server"
+
+[tool.pdm]
+# Optional: Configure PDM if used for local dev management in this sub-project
+
+[tool.uv]
+# Optional: Configure uv if used 
+
+[tool.pytest.ini_options]
+# Remove the addopts line as it didn't help
+# addopts = "-p aioresponses"
+asyncio_mode = "auto" # Or "strict", ensures pytest-asyncio runs
+asyncio_default_fixture_loop_scope = "function" # Address deprecation warning
+log_cli = true
+log_cli_level = "DEBUG" # Lower level to see debug messages 
+
+[tool.ruff]
+# Same as Black.
+line-length = 88
+indent-width = 4
+
+# Enable Pyflakes, Pycodestyle, and isort rules by default.
+# Recommended: Select specific rule codes based on project needs.
+# Example: select = ["E", "F", "W", "I"]
+# For now, let's rely on defaults + line length.
+
+[tool.ruff.lint]
+select = [
+    "E",  # pycodestyle errors
+    "W",  # pycodestyle warnings
+    "F",  # pyflakes
+    "I",  # isort
+    "UP", # pyupgrade
+    # Add more rule codes as needed, e.g., "C90" for complexity
+]
+ignore = [
+    "E501", # Ignore line length violations (handled by formatter or explicitly set above)
+]
+
+# Allow unused variables when underscore-prefixed.
+# dummy-variable-rgx = "^_(_+|[a-zA-Z0-9_]*[a-zA-Z0-9])?$"
+
+[tool.ruff.format]
+# Like Black, use double quotes for strings.
+quote-style = "double"
+# Like Black, indent with spaces, rather than tabs.
+indent-style = "space"
+# Like Black, respect magic trailing commas.
+skip-magic-trailing-comma = false
+# Like Black, automatically detect the appropriate line ending.
+line-ending = "auto" 

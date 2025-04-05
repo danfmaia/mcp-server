@@ -1,0 +1,10 @@
+{
+  "jsonrpc": "2.0",
+  "id": 0,
+  "method": "initialize",
+  "params": {
+    "processId": 1234,
+    "clientInfo": { "name": "Manual Test", "version": "0.1" },
+    "capabilities": {}
+  }
+}

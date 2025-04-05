@@ -1,0 +1,17 @@
+2025-04-04 22:59:48,757 - INFO - --- Script start logging to /home/danfmaia/_repos/career-agent/tools/mcp_server/src/mcp_server/mcp_server_startup.log ---
+2025-04-04 22:59:48,757 - INFO - Python executable: /home/danfmaia/_repos/career-agent/tools/mcp_server/.venv/bin/python3
+2025-04-04 22:59:48,757 - INFO - sys.path: ['/home/danfmaia/_repos/career-agent/tools/mcp_server/.venv/bin', '/usr/local/lib/python311.zip', '/usr/local/lib/python3.11', '/usr/local/lib/python3.11/lib-dynload', '/home/danfmaia/_repos/career-agent/tools/mcp_server/.venv/lib/python3.11/site-packages', '/home/danfmaia/_repos/career-agent/tools/mcp_server/src']
+2025-04-04 22:59:48,757 - INFO - Current working directory: /home/danfmaia/_repos/career-agent/tools/mcp_server
+2025-04-04 22:59:48,757 - DEBUG - Initializing server 'mcp-tools'
+2025-04-04 22:59:48,757 - DEBUG - Registering handler for ListToolsRequest
+2025-04-04 22:59:48,757 - DEBUG - Registering handler for CallToolRequest
+2025-04-04 22:59:48,758 - DEBUG - Using selector: EpollSelector
+2025-04-04 22:59:48,758 - INFO - Starting mcp-tools v0.1.0...
+2025-04-04 22:59:48,815 - INFO - MCP stdio transport established.
+2025-04-04 22:59:48,819 - INFO - Waiting for initialization...
+2025-04-04 22:59:48,843 - DEBUG - Received message: root=InitializedNotification(method='notifications/initialized', params=None, jsonrpc='2.0')
+2025-04-04 22:59:48,845 - DEBUG - Received message: <mcp.shared.session.RequestResponder object at 0x7e3cff9eb950>
+2025-04-04 22:59:48,845 - INFO - Processing request of type ListToolsRequest
+2025-04-04 22:59:48,846 - DEBUG - Dispatching request of type ListToolsRequest
+2025-04-04 22:59:48,846 - INFO - Handling list_tools request
+2025-04-04 22:59:48,846 - DEBUG - Response sent
