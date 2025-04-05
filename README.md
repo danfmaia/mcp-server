@@ -41,9 +41,9 @@ This project contains a general MCP server designed to provide tools for AI agen
 This project uses `uv` for environment and dependency management, orchestrated via a `Makefile`.
 
 1.  **Navigate to the project directory:**
-    Ensure you are in the root directory of *this* project (`mcp_server`).
+    Ensure you are in the root directory of *this* project (`mcp-server`).
     ```bash
-    cd /path/to/mcp_server 
+    cd /path/to/mcp-server 
     ```
 
 2.  **Install dependencies (including dev/test):**
@@ -99,13 +99,13 @@ This server can be integrated with Cursor as an MCP tool using the following glo
       "name": "Local Link Checker", // Name displayed in Cursor
       "type": "command",
       // Use the absolute path to the python executable within THIS project's venv
-      "command": "/absolute/path/to/mcp_server/.venv/bin/python", 
+      "command": "/absolute/path/to/mcp-server/.venv/bin/python", 
       "args": [
         "-m",                   // Run module
         "mcp_server.server"     // The server module to run
       ],
       // Optional: Define the working directory if needed (usually handled by -m)
-      // "cwd": "/absolute/path/to/mcp_server"
+      // "cwd": "/absolute/path/to/mcp-server"
     }
   }
 }
@@ -113,9 +113,9 @@ This server can be integrated with Cursor as an MCP tool using the following glo
 
 **Important Notes for Integration:**
 
--   **Absolute Paths:** You MUST replace `/absolute/path/to/mcp_server` with the correct, absolute path to this project's directory on your system.
+-   **Absolute Paths:** You MUST replace `/absolute/path/to/mcp-server` with the correct, absolute path to this project's directory on your system.
 -   **Virtual Environment:** This configuration assumes you have run `make install-dev` first to create the `.venv` and install dependencies within this project directory.
--   **Working Directory & File Paths:** When run via `python -m`, the server's working directory is typically the project root (`/absolute/path/to/mcp_server`). Therefore, when invoking the tool (e.g., `@Local Link Checker`), the `file_path` argument should be relative to this project root (e.g., `file_path: test_links.md` for a file at the root) or an absolute path.
+-   **Working Directory & File Paths:** When run via `python -m`, the server's working directory is typically the project root (`/absolute/path/to/mcp-server`). Therefore, when invoking the tool (e.g., `@Local Link Checker`), the `file_path` argument should be relative to this project root (e.g., `file_path: test_links.md` for a file at the root) or an absolute path.
 -   **Restart Cursor:** After adding or modifying `~/.cursor/mcp.json`, you must restart Cursor for the changes to take effect.
 
 _Previous integration attempts using different methods (like `uv run` or shell wrappers) failed due to issues with Cursor's process execution environment on Linux. The direct `python -m` approach using the project's own virtual environment is the configuration proven to work._
