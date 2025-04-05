@@ -131,4 +131,12 @@ dmypy.json
 cython_debug/
 
 # Ignore *.log files in the src directory
-src/**/*.log 
+src/**/*.log
+
+# Editor directories and files
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw? 
