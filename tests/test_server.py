@@ -1,12 +1,19 @@
+import pathspec  # Import pathspec for mocking
+from mcp_server.server import (
+    handle_list_tools, handle_call_tool, _check_single_file
+)
 from pathlib import Path
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch, mock_open
 
 import mcp.types as types
 import pytest
+import sys
+
+# Ensure src directory is in path for imports if running tests directly
+sys.path.insert(0, str(Path(__file__).parent.parent / 'src'))
 
 # Import functions to test from server.py
 # Adjust the import path based on your project structure if necessary
-from mcp_server.server import handle_call_tool, handle_list_tools
 
 # Mark all tests in this module as asyncio
 pytestmark = pytest.mark.asyncio
@@ -481,67 +488,109 @@ async def test_handle_call_tool_directory_empty(mock_exists, mock_is_dir, mock_r
     assert f"No Markdown files found in directory: {dir_path_arg}" in result[0].text
 
 
-# --- Tests for check_markdown_links_project ---
+# --- Tests for handle_call_tool: Project Tool ---
 
 @pytest.mark.anyio
+# Test case when .gitignore exists and is parsed successfully
+@patch('pathspec.PathSpec.from_lines')
+@patch('builtins.open')
 @patch('pathlib.Path.rglob')
-@patch('pathlib.Path.is_file', return_value=True)
+@patch('pathlib.Path.is_file', autospec=True)
 @patch('mcp_server.server._check_single_file', new_callable=AsyncMock)
-async def test_handle_call_tool_project_success_manual_ignore(
-    mock_check_single, mock_path_is_file, mock_rglob
+async def test_handle_call_tool_project_with_ignore_pathspec(
+    mock_check_single, mock_is_file, mock_rglob, mock_builtin_open, mock_from_lines
 ):
-    """Test project scan correctly ignores files based on manual prefix list."""
+    """Test project scan respects .gitignore rules using pathspec."""
     # Arrange
-    project_root = Path("/home/danfmaia/_repos/mcp-server")
-    # Files found by rglob
-    path_kept1 = project_root / "README.md"
-    path_kept2 = project_root / "docs/plan.md"
-    path_ignored_venv = project_root / ".venv/sub/ignored.md"
-    path_ignored_ref = project_root / "ref_repos/other/ignored.md"
-    path_ignored_pytest = project_root / ".pytest_cache/stuff/ignored.md"
-
-    # Mock rglob to return all potential files
-    mock_rglob.return_value = [
-        path_kept1,
-        path_ignored_venv,
-        path_kept2,
-        path_ignored_ref,
-        path_ignored_pytest
+    gitignore_content = "ignored/\\n*.tmp.md\\n.venv/"
+    gitignore_path = Path("/home/danfmaia/_repos/mcp-server") / ".gitignore"
+    kept_path1 = Path("/home/danfmaia/_repos/mcp-server") / "docs/real.md"
+    kept_path2 = Path("/home/danfmaia/_repos/mcp-server") / "root.md"
+    # Define ignored paths for setting up mocks, even if is_file isn't mocked directly
+    ignored_path_dir = Path(
+        "/home/danfmaia/_repos/mcp-server") / "ignored/ignore_me.md"
+    ignored_path_pattern = Path(
+        "/home/danfmaia/_repos/mcp-server") / "other/ignore_me.tmp.md"
+    ignored_path_venv = Path(
+        "/home/danfmaia/_repos/mcp-server") / ".venv/sub/ignore_me.md"
+    all_potential_paths = [
+        kept_path1, ignored_path_dir, kept_path2, ignored_path_pattern, ignored_path_venv
     ]
+
+    # Mock .gitignore check and open
+    mock_gitignore_handle = MagicMock()
+    mock_gitignore_handle.read.return_value = gitignore_content
+    mock_context = MagicMock()
+    mock_context.__enter__.return_value = mock_gitignore_handle
+    mock_context.__exit__.return_value = None
+    # Setup is_file mock - Simply return True as we assume .gitignore exists
+    mock_is_file.return_value = True
+    mock_builtin_open.return_value = mock_context
+
+    # Mock PathSpec object and its match_files method
+    mock_spec = MagicMock()
+    ignored_relative = {
+        str(ignored_path_dir.relative_to(
+            Path("/home/danfmaia/_repos/mcp-server"))),
+        str(ignored_path_pattern.relative_to(
+            Path("/home/danfmaia/_repos/mcp-server"))),
+        str(ignored_path_venv.relative_to(
+            Path("/home/danfmaia/_repos/mcp-server")))
+    }
+    mock_spec.match_files.return_value = ignored_relative
+    mock_from_lines.return_value = mock_spec
+
+    # Mock rglob results - return ALL potential paths
+    mock_rglob.return_value = all_potential_paths
 
     # Mock the check results for the files that *should* be processed
     mock_check_single.side_effect = [
-        {'total': 1, 'valid': ['http://a.com'],
-            'broken': [], 'errors': []},  # For path_kept1
-        {'total': 1, 'valid': ['http://b.com'],
-            'broken': [], 'errors': []}  # For path_kept2
+        {'total': 1, 'valid': ['http://kept1.com'],
+            'broken': [], 'errors': []},  # For kept_path1
+        {'total': 1, 'valid': ['http://kept2.com'],
+            'broken': [], 'errors': []}  # For kept_path2
     ]
 
     # Act
     result = await handle_call_tool(name="check_markdown_links_project", arguments={})
 
     # Assert
+    # Check the gitignore call happened
+    assert mock_is_file.called  # Verify is_file was called
+    # mock_is_file.assert_any_call(gitignore_path)
+
+    # Assert open was called for .gitignore
+    mock_builtin_open.assert_called_once_with(
+        gitignore_path, 'r', encoding='utf-8')
+    mock_from_lines.assert_called_once_with(
+        pathspec.patterns.GitWildMatchPattern, gitignore_content.splitlines()
+    )
+    # Check that match_files was called with the correct relative paths (of files)
+    expected_relative_paths_for_match = [
+        str(p.relative_to(Path("/home/danfmaia/_repos/mcp-server"))) for p in all_potential_paths
+    ]
+    mock_spec.match_files.assert_called_once_with(
+        expected_relative_paths_for_match)
+
     mock_rglob.assert_called_once_with("*.md")
     # Assert _check_single_file was called only for the non-ignored files
     assert mock_check_single.call_count == 2
-    mock_check_single.assert_any_call(path_kept1)
-    mock_check_single.assert_any_call(path_kept2)
+    mock_check_single.assert_any_call(kept_path1)
+    mock_check_single.assert_any_call(kept_path2)
 
-    # Check report details (ensure relative paths are used)
+    # Check report details
     report_text = result[0].text
-    assert "Project Scan (Manual Filtering)" in report_text
+    assert "Consolidated Link Check Report" in report_text
     assert "Files Processed (2):" in report_text
-    assert "- README.md" in report_text
-    assert "- docs/plan.md" in report_text
-    assert ".venv/sub/ignored.md" not in report_text  # Verify ignored file not listed
-    assert "ref_repos/other/ignored.md" not in report_text
-    assert ".pytest_cache/stuff/ignored.md" not in report_text
+    assert "- docs/real.md" in report_text
+    assert "- root.md" in report_text
+    assert "ignored/ignore_me.md" not in report_text  # Verify ignored file not listed
+    assert "other/ignore_me.tmp.md" not in report_text
+    assert ".venv/sub/ignore_me.md" not in report_text
     assert "Total Links Found: 2" in report_text
 
 
 @pytest.mark.anyio
-# Test case for when no files are found (already covered by test_handle_call_tool_project_none_found)
-# Let's rename the existing none_found test slightly for clarity
 @patch('pathlib.Path.rglob', return_value=[])  # Mock rglob to find nothing
 # Assume .gitignore exists check (though not used)
 @patch('pathlib.Path.is_file', return_value=True)
@@ -602,3 +651,212 @@ async def test_handle_call_tool_directory_target_does_not_exist(mock_exists):
             arguments={"directory_path": dir_path_arg}
         )
     mock_exists.assert_called_once()
+
+
+@pytest.mark.parametrize("anyio_backend", ["asyncio", "trio"])
+@patch("mcp_server.server._check_single_file", new_callable=AsyncMock)
+@patch("pathspec.PathSpec.from_lines")  # Mock pathspec loading
+@patch("aiofiles.open", new_callable=mock_open)  # Mock async file open
+# Mock relative_to method WITH AUTOSPEC
+@patch("pathlib.Path.relative_to", autospec=True)
+@patch("pathlib.Path.rglob")  # Mock rglob method
+# Mock is_file method WITH AUTOSPEC
+@patch("pathlib.Path.is_file", autospec=True)
+async def test_handle_call_tool_project_no_gitignore(
+    mock_is_file,
+    mock_rglob,
+    mock_relative_to,
+    mock_aio_open,  # Keep this
+    mock_pathspec_from_lines,  # Keep this
+    mock_check_single,
+    anyio_backend,
+):
+    """Test project scan when .gitignore does not exist."""
+    # --- Define Paths ---
+    project_root = Path("/home/danfmaia/_repos/mcp-server")
+    gitignore_path = project_root / ".gitignore"
+    path1 = project_root / "path1.md"
+    path2 = project_root / "path2.md"
+
+    # --- Configure Mocks ---
+    # Configure is_file side_effect (accepts self instance)
+    def is_file_side_effect(self):  # Changed self_path to self
+        if self == gitignore_path:
+            return False  # .gitignore does not exist
+        elif self in [path1, path2]:
+            return True  # md files exist
+        return False  # Default
+    mock_is_file.side_effect = is_file_side_effect
+
+    # Configure rglob to return our real Path objects
+    # Since we mock Path.rglob, the first arg 'self' is implicitly passed
+    mock_rglob.return_value = [path1, path2]
+
+    # Configure relative_to side_effect (accepts self instance and base_path)
+    def relative_to_side_effect(self, base_path):  # Changed self_path to self
+        if self == path1:
+            return Path("path1.md")
+        elif self == path2:
+            return Path("path2.md")
+        return Path(str(self))  # Fallback
+    mock_relative_to.side_effect = relative_to_side_effect
+
+    # --- Mock _check_single_file setup ---
+    path1_result = {'total': 1, 'valid': ['http://path1.com'],
+                    'broken': [], 'errors': []}
+    path2_result = {'total': 1, 'valid': [], 'broken': [
+        {'url': 'http://path2.com', 'reason': '404'}], 'errors': []}
+
+    async def check_single_side_effect(file_path_arg):
+        if file_path_arg == path1:  # Compare with real Path
+            return path1_result
+        elif file_path_arg == path2:  # Compare with real Path
+            return path2_result
+        raise ValueError(
+            f"Unexpected call to _check_single_file with {file_path_arg}")
+    mock_check_single.side_effect = check_single_side_effect
+
+    # --- Call the actual function ---
+    result = await handle_call_tool(
+        name="check_markdown_links_project", arguments={}
+    )
+
+    # --- Assertions ---
+    # Check is_file call on gitignore_path instance
+    # mock_is_file assertion check happens implicitly via side_effect calls
+    # Check rglob call on project_root instance
+    # We can't directly assert mock_rglob was called *on* project_root easily
+    # because the instance isn't readily available. We rely on the return value.
+    # Check it was called with the pattern
+    mock_rglob.assert_called_once_with("*.md")
+
+    # Check _check_single_file calls with real Path objects
+    assert mock_check_single.call_count == 2
+    mock_check_single.assert_any_call(path1)
+    mock_check_single.assert_any_call(path2)
+
+    # Assert the result structure and content
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert isinstance(result[0], types.TextContent)
+
+    report_text = result[0].text
+    assert "Consolidated Link Check Report" in report_text
+    assert "Project Scan (using .gitignore)" in report_text
+    assert "- path1.md" in report_text  # Check relative paths from mock
+    assert "- path2.md" in report_text
+    assert "Valid Links: 1" in report_text
+    assert "Broken Links: 1" in report_text
+    assert "Errored Links: 0" in report_text
+    assert "- http://path2.com (Reason: 404)" in report_text
+
+
+@pytest.mark.anyio
+# Test case when .gitignore parsing fails
+@patch("mcp_server.server._check_single_file", new_callable=AsyncMock)
+@patch("pathspec.PathSpec.from_lines")
+# Patch builtins.open within the server module's scope using MagicMock for sync context
+@patch("mcp_server.server.open", new_callable=MagicMock)
+# Patch specific Path methods needed
+@patch("pathlib.Path.relative_to", autospec=True)
+@patch("pathlib.Path.rglob")
+@patch("pathlib.Path.is_file", autospec=True)
+async def test_handle_call_tool_project_gitignore_parse_error_pathspec(
+    mock_is_file,  # Mock for is_file method
+    mock_rglob,  # Mock for rglob method
+    mock_relative_to,  # Mock for relative_to method
+    mock_builtin_open,  # Renamed mock for clarity (was mock_aio_open)
+    mock_pathspec_from_lines,
+    mock_check_single,
+):
+    """Test project scan handles .gitignore parsing errors gracefully (processes all files)."""
+    # --- Define Paths ---
+    project_root = Path("/home/danfmaia/_repos/mcp-server")
+    gitignore_path = project_root / ".gitignore"
+    path1 = project_root / "file1.md"
+    path2 = project_root / "docs/plan.md"
+
+    # --- Configure Mocks (is_file, rglob, relative_to) ---
+    # is_file: True for gitignore and md files (accepts self)
+    def is_file_side_effect(self):  # Changed self_path to self
+        if self == gitignore_path:
+            return True  # .gitignore exists
+        elif self in [path1, path2]:
+            return True  # md files exist
+        return False  # Default
+    mock_is_file.side_effect = is_file_side_effect
+    mock_rglob.return_value = [path1, path2]
+
+    def relative_to_side_effect(self, base_path):  # Changed self_path to self
+        if self == path1:
+            return Path("file1.md")
+        elif self == path2:
+            return Path("docs/plan.md")
+        return Path(str(self))  # Fallback
+    mock_relative_to.side_effect = relative_to_side_effect
+
+    # --- Mock File I/O and Parsing ---
+    # Configure mock_builtin_open to return a synchronous context manager
+    mock_file_handle = MagicMock()
+    mock_file_handle.read.return_value = "invalid\npatterns*"
+
+    # Standard context manager mock setup for synchronous open
+    context_manager = MagicMock()
+    context_manager.__enter__.return_value = mock_file_handle
+    context_manager.__exit__.return_value = None
+    # Assign the sync context manager
+    mock_builtin_open.return_value = context_manager
+
+    # Mock PathSpec.from_lines to raise an error
+    mock_pathspec_from_lines.side_effect = ValueError("Mock parse error")
+
+    # --- Mock _check_single_file Setup ---
+    path1_result = {'total': 1, 'valid': [
+        'http://a.com'], 'broken': [], 'errors': []}
+    path2_result = {'total': 1, 'valid': [
+        'http://b.com'], 'broken': [], 'errors': []}
+
+    async def check_single_side_effect(file_path_arg):
+        if file_path_arg == path1:
+            return path1_result
+        elif file_path_arg == path2:
+            return path2_result
+        raise ValueError(
+            f"Unexpected call to _check_single_file with {file_path_arg}")
+    mock_check_single.side_effect = check_single_side_effect
+
+    # --- Call the actual function ---
+    result = await handle_call_tool(name="check_markdown_links_project", arguments={})
+
+    # --- Assertions ---
+    # Verify gitignore check happened (implicitly via side_effect)
+    # Assert builtins.open was called for .gitignore
+    mock_builtin_open.assert_called_once_with(
+        gitignore_path, 'r', encoding='utf-8')
+    # Assert from_lines was called (and raised error)
+    mock_pathspec_from_lines.assert_called_once()
+
+    # Assert rglob was called
+    mock_rglob.assert_called_once_with("*.md")
+
+    # Assert _check_single_file was called for *all* found files due to parse error
+    assert mock_check_single.call_count == 2
+    mock_check_single.assert_any_call(path1)
+    mock_check_single.assert_any_call(path2)
+
+    # Assert report structure and content
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert isinstance(result[0], types.TextContent)
+
+    report_text = result[0].text
+    assert "Consolidated Link Check Report" in report_text
+    assert "Project Scan (using .gitignore)" in report_text
+    assert "- file1.md" in report_text
+    assert "- docs/plan.md" in report_text
+    # Ensure no incorrect assertions are present here
+    # The following lines were incorrectly added and should not be here:
+    # assert "Valid Links: 1" in report_text
+    # assert "Broken Links: 1" in report_text
+    # assert "Errored Links: 0" in report_text
+    # assert "- http://path2.com (Reason: 404)" in report_text

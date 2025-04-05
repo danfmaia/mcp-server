@@ -9,6 +9,7 @@ from pathlib import Path
 import aiofiles  # Added for async file reading
 import mcp.server.stdio
 import mcp.types as types
+import pathspec  # Import pathspec
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
 
@@ -289,39 +290,56 @@ async def handle_call_tool(
             return [types.TextContent(type="text", text=f"No Markdown files found in directory: {directory_path_str}")]
 
     elif name == "check_markdown_links_project":
-        report_source_info = "Project Scan (Manual Filtering)"
-        # Define known ignored directory prefixes relative to PROJECT_ROOT
-        # Use strings and ensure they end with a slash
-        ignored_prefixes = (
-            ".venv/",
-            "venv/",
-            ".git/",
-            "__pycache__/",
-            ".pytest_cache/",
-            "ref_repos/",
-            "build/",
-            "dist/",
-            "site/",  # mkdocs output
-        )
+        report_source_info = "Project Scan (using .gitignore)"
+        # Re-introduce placeholders for gitignore handling with pathspec
+        gitignore_path = PROJECT_ROOT / ".gitignore"
+        spec = None
+        if gitignore_path.is_file():
+            try:
+                # Read .gitignore content
+                with open(gitignore_path, 'r', encoding='utf-8') as f:
+                    gitignore_content = f.read()
+                # Create pathspec from .gitignore lines using gitwildmatch style
+                spec = pathspec.PathSpec.from_lines(
+                    pathspec.patterns.GitWildMatchPattern, gitignore_content.splitlines()
+                )
+                logger.info(f"Loaded .gitignore rules from: {gitignore_path}")
+            except Exception as e:
+                logger.warning(
+                    f"Could not read/parse .gitignore file at {gitignore_path}: {e}", exc_info=True)
+        else:
+            logger.info("No .gitignore file found at project root.")
 
         logger.info(
             f"Scanning project root recursively for *.md files: {PROJECT_ROOT}")
-        all_files = list(PROJECT_ROOT.rglob("*.md"))
+        all_files_paths = list(PROJECT_ROOT.rglob("*.md"))
         logger.info(
-            f"Found {len(all_files)} total Markdown files before filtering.")
+            f"Found {len(all_files_paths)} total Markdown files before filtering.")
 
+        # Filter files using pathspec (if available)
         filtered_files = []
-        for f in all_files:
-            if not f.is_file():
-                continue  # Skip directories
-            relative_path_str = str(f.relative_to(PROJECT_ROOT))
-            # Check if the relative path starts with any ignored prefix
-            if not any(relative_path_str.startswith(prefix) for prefix in ignored_prefixes):
-                filtered_files.append(f)
-            else:
-                # Optional: log ignored files
-                logger.debug(
-                    f"Ignoring file due to prefix match: {relative_path_str}")
+        if spec:
+            # Convert Path objects to relative strings for matching
+            # Ensure we only check files (rglob might yield dirs)
+            all_file_paths_relative_str = [
+                str(p.relative_to(PROJECT_ROOT))
+                for p in all_files_paths if p.is_file()
+            ]
+            # Get the set of ignored file paths (as relative strings)
+            ignored_files_set = set(
+                spec.match_files(all_file_paths_relative_str))
+            logger.info(
+                f"Found {len(ignored_files_set)} ignored files based on .gitignore")
+            # Iterate through original Path objects, keeping those not in the ignored set
+            for p in all_files_paths:
+                if p.is_file() and str(p.relative_to(PROJECT_ROOT)) not in ignored_files_set:
+                    filtered_files.append(p)
+        else:
+            # No spec (no .gitignore or failed to parse), process all files
+            logger.info("No .gitignore spec, processing all found files.")
+            for p in all_files_paths:
+                if p.is_file():
+                    filtered_files.append(p)
 
         logger.info(
             f"Processing {len(filtered_files)} Markdown files after filtering.")
