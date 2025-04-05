@@ -11,7 +11,7 @@ dependencies = [
     "beautifulsoup4",
     "aiohttp>=3.9.0",
     "aiofiles",
-    "gitignore-parser>=0.1.9",
+    "uvicorn >= 0.20.0",
 ]
 requires-python = ">=3.10"
 readme = "README.md"
@@ -33,7 +33,7 @@ requires = ["pdm-backend"]
 build-backend = "pdm.backend"
 
 [project.scripts]
-mcp_server = "mcp_server.server:run_server"
+mcp_server = "src.mcp_server.server:run_server"
 
 [tool.pdm]
 # Optional: Configure PDM if used for local dev management in this sub-project
@@ -86,10 +86,13 @@ skip-magic-trailing-comma = false
 line-ending = "auto"
 
 [tool.uv.sources]
-mcp-sdk = { git = "https://github.com/modelcontext/mcp-sdk", rev = "v0.2.1" }
+# Add your custom sources here, for example:
+# mcp = { git = "https://github.com/modelcontextprotocol/python-sdk.git", rev = "main" }
+# mcp = { editable = true } # REMOVED - Project install handled by install command
+# gitignore-parser = { index = "pypi" } # REMOVED
+
 # Standard dependencies below are fetched from PyPI via [project.dependencies]
 # aiofiles = "*"
 # aiohttp = "*"
 # markdown-it-py = "*"
-# gitignore-parser = "*"
 # pytest = "*" 

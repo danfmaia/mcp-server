@@ -11,7 +11,6 @@ import mcp.server.stdio
 import mcp.types as types
 from mcp.server import NotificationOptions, Server
 from mcp.server.models import InitializationOptions
-import gitignore_parser  # Added import
 
 from .tools.link_checker import check_links_in_content
 
@@ -290,18 +289,20 @@ async def handle_call_tool(
             return [types.TextContent(type="text", text=f"No Markdown files found in directory: {directory_path_str}")]
 
     elif name == "check_markdown_links_project":
-        report_source_info = "Project Scan (respecting .gitignore)"
-        gitignore_path = PROJECT_ROOT / ".gitignore"
-        matches = None
-        if gitignore_path.is_file():
-            try:
-                with open(gitignore_path, 'r') as f:
-                    matches = gitignore_parser.parse(f)
-                logger.info(f"Loaded .gitignore rules from: {gitignore_path}")
-            except Exception as e:
-                logger.warning(f"Could not parse .gitignore: {e}")
-        else:
-            logger.info("No .gitignore file found at project root.")
+        report_source_info = "Project Scan (Manual Filtering)"
+        # Define known ignored directory prefixes relative to PROJECT_ROOT
+        # Use strings and ensure they end with a slash
+        ignored_prefixes = (
+            ".venv/",
+            "venv/",
+            ".git/",
+            "__pycache__/",
+            ".pytest_cache/",
+            "ref_repos/",
+            "build/",
+            "dist/",
+            "site/",  # mkdocs output
+        )
 
         logger.info(
             f"Scanning project root recursively for *.md files: {PROJECT_ROOT}")
@@ -310,21 +311,24 @@ async def handle_call_tool(
             f"Found {len(all_files)} total Markdown files before filtering.")
 
         filtered_files = []
-        if matches:
-            for f in all_files:
-                # Check if it's a file AND doesn't match gitignore
-                if f.is_file() and not matches(str(f.resolve())):
-                    filtered_files.append(f)
-        else:
-            for f in all_files:
-                if f.is_file():
-                    filtered_files.append(f)
+        for f in all_files:
+            if not f.is_file():
+                continue  # Skip directories
+            relative_path_str = str(f.relative_to(PROJECT_ROOT))
+            # Check if the relative path starts with any ignored prefix
+            if not any(relative_path_str.startswith(prefix) for prefix in ignored_prefixes):
+                filtered_files.append(f)
+            else:
+                # Optional: log ignored files
+                logger.debug(
+                    f"Ignoring file due to prefix match: {relative_path_str}")
 
         logger.info(
             f"Processing {len(filtered_files)} Markdown files after filtering.")
 
         if not filtered_files:
-            return {"report": "No processable Markdown files found."}
+            # Use TextContent for consistency
+            return [types.TextContent(type="text", text="No processable Markdown files found.")]
 
         tasks = [asyncio.create_task(_check_single_file(file))
                  for file in filtered_files]
