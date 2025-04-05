@@ -1,5 +1,5 @@
-from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import mcp.types as types
 import pytest
@@ -157,15 +157,12 @@ async def test_handle_call_tool_file_not_found():
 
 
 @pytest.mark.anyio
-# Still need patch to mock the open call that raises PermissionError
 @patch('aiofiles.open')
 async def test_handle_call_tool_file_other_exception(mock_aio_open):
     """Test link check handles exceptions during file processing."""
     # Arrange
     mock_aio_open.side_effect = PermissionError("Mock permission denied")
     mock_file_path_str = "unreadable/path.md"
-    absolute_path = Path(
-        "/home/danfmaia/_repos/mcp-server") / mock_file_path_str
 
     # Act
     result = await handle_call_tool(
@@ -190,8 +187,6 @@ async def test_handle_call_tool_file_report_formatting_broken_links(mock_check_l
     """Test report formatting for a single file with broken links."""
     # Arrange
     mock_file_path_str = "dummy/report_broken.md"
-    absolute_path = Path(
-        "/home/danfmaia/_repos/mcp-server") / mock_file_path_str
     mock_content = "[Broken](http://broken.com)"
     mock_aio_open.return_value.__aenter__.return_value.read.return_value = mock_content
     mock_check_links.return_value = {
@@ -307,9 +302,10 @@ async def test_handle_call_tool_files_success(mock_check_links, mock_aio_open):
 @pytest.mark.anyio
 @patch('mcp_server.server.check_links_in_content')
 @patch('aiofiles.open')
-@patch('pathlib.Path.rglob')  # Patch rglob directly
-@patch('pathlib.Path.is_dir')  # Patch is_dir directly
-async def test_handle_call_tool_directory_success(mock_is_dir, mock_rglob, mock_aio_open, mock_check_links):
+@patch('pathlib.Path.rglob')
+@patch('pathlib.Path.is_dir')
+@patch('pathlib.Path.exists')
+async def test_handle_call_tool_directory_success(mock_exists, mock_is_dir, mock_rglob, mock_aio_open, mock_check_links):
     """Test success path with a directory_path, expecting a consolidated report."""
     # Arrange
     dir_path_arg = "dummy/scan_dir"
@@ -317,7 +313,8 @@ async def test_handle_call_tool_directory_success(mock_is_dir, mock_rglob, mock_
     resolved_scan_dir = (project_root / dir_path_arg).resolve()
 
     # Configure mocks for methods called on the resolved path
-    mock_is_dir.return_value = True  # Assume is_dir is called on resolved_scan_dir
+    mock_exists.return_value = True  # Directory should exist
+    mock_is_dir.return_value = True  # And be a directory
 
     # Mocks for the paths rglob should find (these need is_file)
     # Use real Path objects resolved relative to the expected scan dir
@@ -380,8 +377,8 @@ async def test_handle_call_tool_directory_success(mock_is_dir, mock_rglob, mock_
     )
 
     # Assert
-    # Check that is_dir and rglob were called on the resolved path instance
-    # We can't easily check the instance itself, but check they were called once
+    # Check that exists, is_dir and rglob were called on the resolved path instance
+    mock_exists.assert_called_once()
     mock_is_dir.assert_called_once()
     mock_rglob.assert_called_once_with('*.md')
 
@@ -404,7 +401,7 @@ async def test_handle_call_tool_directory_success(mock_is_dir, mock_rglob, mock_
 
     assert "Consolidated Link Check Report" in report_text
     assert f"Directory Scanned: {dir_path_arg}" in report_text
-    assert f"Files Processed (2):" in report_text
+    assert "Files Processed (2):" in report_text
     assert f"- {abs_mock_path1}" in report_text
     assert f"- {abs_mock_path2}" in report_text
     assert "Overall Summary:" in report_text
@@ -417,45 +414,41 @@ async def test_handle_call_tool_directory_success(mock_is_dir, mock_rglob, mock_
 
 
 @pytest.mark.anyio
-@patch('pathlib.Path.is_dir')  # Patch only is_dir
-async def test_handle_call_tool_directory_not_found(mock_is_dir):
+@patch('pathlib.Path.is_dir')
+@patch('pathlib.Path.exists')
+async def test_handle_call_tool_directory_not_found(mock_exists, mock_is_dir):
     """Test calling check_markdown_link_directory with a path that is not a directory."""
     # Arrange
     dir_path_arg = "dummy/not_a_dir"
-    project_root = Path("/home/danfmaia/_repos/mcp-server")
-    expected_resolved_path = (project_root / dir_path_arg).resolve()
 
-    # Configure mock is_dir to return False only for the specific resolved path
-    # Add 'self' argument to match expected method signature when patched
-    def is_dir_side_effect(instance_self):
-        if instance_self == expected_resolved_path:
-            return False
-        # Allow other calls if needed, though ideally only the target path is checked
-        return True
-    mock_is_dir.side_effect = is_dir_side_effect
+    # Configure mocks: Path exists but is not a directory
+    mock_exists.return_value = True
+    mock_is_dir.return_value = False
 
     # Act & Assert
-    with pytest.raises(ValueError, match=f"Directory not found: {dir_path_arg}"):
+    # Expect the error for not being a directory
+    with pytest.raises(ValueError, match=f"Path is not a directory: {dir_path_arg}"):
         await handle_call_tool(
             name="check_markdown_link_directory",
             arguments={"directory_path": dir_path_arg}
         )
-    # Check is_dir was called at least once (implicitly on the target path)
-    mock_is_dir.assert_called()
+    # Check exists and is_dir were called exactly once
+    mock_exists.assert_called_once()
+    mock_is_dir.assert_called_once()
 
 
 @pytest.mark.anyio
-@patch('pathlib.Path.rglob')  # Patch rglob
-@patch('pathlib.Path.is_dir')  # Patch is_dir
-async def test_handle_call_tool_directory_empty(mock_is_dir, mock_rglob):
+@patch('pathlib.Path.rglob')
+@patch('pathlib.Path.is_dir')
+@patch('pathlib.Path.exists')
+async def test_handle_call_tool_directory_empty(mock_exists, mock_is_dir, mock_rglob):
     """Test calling check_markdown_link_directory on an empty directory (no *.md files)."""
     # Arrange
     dir_path_arg = "dummy/empty_dir"
-    project_root = Path("/home/danfmaia/_repos/mcp-server")
-    expected_resolved_path = (project_root / dir_path_arg).resolve()
 
     # Configure mocks
-    mock_is_dir.return_value = True  # Directory exists
+    mock_exists.return_value = True  # Directory exists
+    mock_is_dir.return_value = True  # And is a directory
     mock_rglob.return_value = []   # rglob finds nothing
 
     # Act
@@ -465,7 +458,8 @@ async def test_handle_call_tool_directory_empty(mock_is_dir, mock_rglob):
     )
 
     # Assert
-    # Check is_dir and rglob were called
+    # Check exists, is_dir and rglob were called
+    mock_exists.assert_called_once()
     mock_is_dir.assert_called_once()
     mock_rglob.assert_called_once_with('*.md')
 

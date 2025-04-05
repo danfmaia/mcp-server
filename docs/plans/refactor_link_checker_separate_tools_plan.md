@@ -1,6 +1,6 @@
 # Plan: Refactor Link Checker to Separate Tools
 
-**Status:** In Progress
+**Status:** Completed
 
 **Goal:** Refactor the `check-markdown-links` functionality into three separate tools (`check_markdown_link_file`, `check_markdown_link_files`, `check_markdown_link_directory`) to work around agent limitations with `oneOf` schemas and provide the originally intended bulk processing capabilities.
 
@@ -36,8 +36,8 @@
     - Modify `README.md`.
     - Remove documentation for the single `check-markdown-links` tool.
     - Add documentation sections for each of the three new tools, including their names, descriptions, simple input schemas, and example usages.
-6.  `[ ]` **Agent Tool Test:** Verify that the AI agent (Gemini) can successfully call each of the three new tools with appropriate arguments (using absolute paths where necessary based on previous findings).
-7.  `[ ]` **Final Checks:** Run `make lint` and `make test` again.
-8.  `[ ]` **Mark Plan Complete:** Update the status of this plan file to `Completed`.
+6.  `[X]` **Agent Tool Test:** Verify that the AI agent (Gemini) can successfully call each of the three new tools with appropriate arguments (using absolute paths where necessary based on previous findings).
+7.  `[X]` **Final Checks:** Run `make lint` and `make test` again.
+8.  `[X]` **Mark Plan Complete:** Update the status of this plan file to `Completed`.
 
-**Next Step:** Proceed with Step 6: Agent Tool Test (with caveats).
+**Next Step:** None. Plan complete.

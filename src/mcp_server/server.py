@@ -240,9 +240,16 @@ async def handle_call_tool(
         directory_path_str = arguments["directory_path"]
         # Resolve the directory path relative to PROJECT_ROOT
         scan_dir = (PROJECT_ROOT / directory_path_str).resolve()
+        # Log resolved path
+        logger.info(f"Checking resolved path for directory: {scan_dir}")
+        if not scan_dir.exists():
+            logger.error(f"Resolved path does not exist: {scan_dir}")
+            raise ValueError(
+                f"Directory target does not exist: {directory_path_str}")
         if not scan_dir.is_dir():
-            # Use the original path in the error for clarity
-            raise ValueError(f"Directory not found: {directory_path_str}")
+            logger.error(
+                f"Resolved path exists but is not a directory: {scan_dir}")
+            raise ValueError(f"Path is not a directory: {directory_path_str}")
         logger.info(f"Scanning directory recursively: {scan_dir}")
         paths_to_process = [
             p for p in scan_dir.rglob('*.md') if p.is_file()]
@@ -258,10 +265,9 @@ async def handle_call_tool(
 
     # --- Centralized File Processing Logic ---
     for file_path in paths_to_process:
-        # Use resolved path string for operations, original for reporting if needed
         current_path_str = str(file_path)
         # Default, maybe map back later if complex
-        original_path_repr = current_path_str
+        # original_path_repr = current_path_str # Removed: Unused variable
         # (For simplicity, we'll use the resolved path string in reports for now)
         logger.info(f"Checking links in file: {current_path_str}")
         try:
