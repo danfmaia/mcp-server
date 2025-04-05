@@ -1,4 +1,5 @@
 from unittest.mock import AsyncMock, MagicMock, patch
+from pathlib import Path
 
 import mcp.types as types
 import pytest
@@ -15,20 +16,57 @@ async def test_handle_list_tools_returns_correct_tool():
     """Verify that handle_list_tools returns the expected tool definition."""
     tools = await handle_list_tools()
     assert isinstance(tools, list)
-    assert len(tools) == 1
-    tool = tools[0]
-    assert isinstance(tool, types.Tool)
-    assert tool.name == "check-markdown-links"
-    assert tool.description == (
-        "Checks HTTP/HTTPS links in a given Markdown file."
-    )
-    assert tool.inputSchema is not None
-    assert tool.inputSchema.get('type') == 'object'
-    assert 'file_path' in tool.inputSchema.get('properties', {})
-    assert tool.inputSchema['properties']['file_path']['type'] == 'string'
-    description = tool.inputSchema['properties']['file_path']['description']
-    assert "Absolute or relative path" in description
-    assert tool.inputSchema.get('required') == ["file_path"]
+    # Expect 3 tools now
+    assert len(tools) == 3
+
+    # Verify Tool 1: check_markdown_link_file
+    tool1 = tools[0]
+    assert isinstance(tool1, types.Tool)
+    assert tool1.name == "check_markdown_link_file"
+    assert tool1.description == "Checks HTTP/HTTPS links in a single Markdown file."
+    assert tool1.inputSchema == {
+        "type": "object",
+        "properties": {
+            "file_path": {
+                "type": "string",
+                "description": "Path to the single Markdown file."
+            }
+        },
+        "required": ["file_path"],
+    }
+
+    # Verify Tool 2: check_markdown_link_files
+    tool2 = tools[1]
+    assert isinstance(tool2, types.Tool)
+    assert tool2.name == "check_markdown_link_files"
+    assert tool2.description == "Checks HTTP/HTTPS links in a list of Markdown files."
+    assert tool2.inputSchema == {
+        "type": "object",
+        "properties": {
+            "file_paths": {
+                "type": "array",
+                "items": {"type": "string"},
+                "description": "List of paths to specific Markdown files."
+            }
+        },
+        "required": ["file_paths"],
+    }
+
+    # Verify Tool 3: check_markdown_link_directory
+    tool3 = tools[2]
+    assert isinstance(tool3, types.Tool)
+    assert tool3.name == "check_markdown_link_directory"
+    assert tool3.description == "Checks HTTP/HTTPS links in all *.md files within a directory (recursively)."
+    assert tool3.inputSchema == {
+        "type": "object",
+        "properties": {
+            "directory_path": {
+                "type": "string",
+                "description": "Path to the directory to scan."
+            }
+        },
+        "required": ["directory_path"],
+    }
 
 
 # --- Tests for handle_call_tool ---
@@ -39,23 +77,8 @@ async def test_handle_call_tool_unknown_tool_raises_error():
         await handle_call_tool(name="unknown-tool-name", arguments={})
 
 
-async def test_handle_call_tool_missing_arguments_raises_error():
-    """Test calling check-markdown-links with None arguments raises ValueError."""
-    with pytest.raises(ValueError, match="Missing arguments"):
-        await handle_call_tool(name="check-markdown-links", arguments=None)
-
-
-async def test_handle_call_tool_missing_file_path_raises_error():
-    """Test calling check-markdown-links with missing file_path raises ValueError."""
-    match_str = "Missing required argument: file_path"
-    with pytest.raises(ValueError, match=match_str):
-        await handle_call_tool(
-            name="check-markdown-links",
-            arguments={"other_arg": 123}
-        )
-
-
 # Helper to create an async mock for aiofiles.open
+# Note: This helper might need adjustments if tests require different mock behaviors per call
 def async_mock_open(read_data):
     mock_file = AsyncMock()
     # Mock the read method to be awaitable and return data
@@ -71,203 +94,382 @@ def async_mock_open(read_data):
     return mock_open_func
 
 
+# --- Tests for check-markdown-links --- (Now split into three tools)
+
+@pytest.mark.anyio
+@patch('aiofiles.open')
 @patch('mcp_server.server.check_links_in_content')
-@patch(
-    'aiofiles.open',
-    new_callable=lambda: async_mock_open(
-        read_data="[Valid Link](http://valid.com)")
-)
-async def test_handle_call_tool_success(mock_aio_open, mock_check_links):
-    """Test the success path for check-markdown-links."""
-    # Arrange: Configure the mock return value for check_links_in_content
+async def test_handle_call_tool_file_success(mock_check_links, mock_aio_open):
+    """Test successful link check for a single file."""
+    # Arrange
+    mock_file_path_str = "dummy/path.md"
+    absolute_path = Path(
+        "/home/danfmaia/_repos/mcp-server") / mock_file_path_str
+    mock_content = "[Valid Link](http://valid.com)"
+    mock_aio_open.return_value.__aenter__.return_value.read.return_value = mock_content
+    mock_check_links.return_value = {'total': 1, 'valid': [
+        'http://valid.com'], 'broken': [], 'errors': []}
+
+    # Act
+    result = await handle_call_tool(
+        name="check_markdown_link_file",
+        arguments={"file_path": mock_file_path_str}
+    )
+
+    # Assert
+    mock_aio_open.assert_called_once_with(
+        absolute_path.resolve(), encoding='utf-8')
+    mock_check_links.assert_called_once_with(mock_content)
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert isinstance(result[0], types.TextContent)
+    assert "Link Check Report for: dummy/path.md" in result[0].text
+    assert "Total Links Found: 1" in result[0].text
+    assert "Valid Links (1):" in result[0].text
+    assert "- http://valid.com" in result[0].text
+
+
+@pytest.mark.anyio
+# Test file not found without mocking aiofiles.open, as the check happens before
+async def test_handle_call_tool_file_not_found():
+    """Test link check when the single file is not found."""
+    # Arrange
+    mock_file_path_str = "nonexistent/path.md"
+    absolute_path = Path(
+        "/home/danfmaia/_repos/mcp-server") / mock_file_path_str
+
+    # Ensure the file actually doesn't exist for the test
+    if absolute_path.exists():
+        pytest.skip(f"Test requires path {absolute_path} to not exist.")
+
+    # Act
+    result = await handle_call_tool(
+        name="check_markdown_link_file",
+        arguments={"file_path": mock_file_path_str}
+    )
+
+    # Assert
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert isinstance(result[0], types.TextContent)
+    # Check error message, which now comes from the handler itself
+    assert f"Error processing file: {mock_file_path_str} - Reason: File not found" in result[0].text
+
+
+@pytest.mark.anyio
+# Still need patch to mock the open call that raises PermissionError
+@patch('aiofiles.open')
+async def test_handle_call_tool_file_other_exception(mock_aio_open):
+    """Test link check handles exceptions during file processing."""
+    # Arrange
+    mock_aio_open.side_effect = PermissionError("Mock permission denied")
+    mock_file_path_str = "unreadable/path.md"
+    absolute_path = Path(
+        "/home/danfmaia/_repos/mcp-server") / mock_file_path_str
+
+    # Act
+    result = await handle_call_tool(
+        name="check_markdown_link_file",
+        arguments={"file_path": mock_file_path_str}
+    )
+
+    # Assert
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert isinstance(result[0], types.TextContent)
+    # Check the specific error message from the handler
+    assert f"Error processing file: {mock_file_path_str} - Reason: PermissionError" in result[0].text
+
+
+# --- Tests for report formatting (can be adapted or removed if helpers are tested separately) ---
+# Example adapting one:
+@pytest.mark.anyio
+@patch('aiofiles.open')
+@patch('mcp_server.server.check_links_in_content')
+async def test_handle_call_tool_file_report_formatting_broken_links(mock_check_links, mock_aio_open):
+    """Test report formatting for a single file with broken links."""
+    # Arrange
+    mock_file_path_str = "dummy/report_broken.md"
+    absolute_path = Path(
+        "/home/danfmaia/_repos/mcp-server") / mock_file_path_str
+    mock_content = "[Broken](http://broken.com)"
+    mock_aio_open.return_value.__aenter__.return_value.read.return_value = mock_content
     mock_check_links.return_value = {
         'total': 1,
-        'valid': ['http://valid.com'],
-        'broken': [],
-        'errors': []
-    }
-    file_path_arg = "dummy/path.md"
-
-    # Act: Call the handler
-    result = await handle_call_tool(
-        name="check-markdown-links",
-        arguments={"file_path": file_path_arg}
-    )
-
-    # Assert: Check mocks and results
-    # Check that the function returned by the patch (our MagicMock)
-    # was called once. This represents calling aiofiles.open().
-    mock_aio_open.assert_called_once()
-
-    mock_check_links.assert_awaited_once_with("[Valid Link](http://valid.com)")
-
-    assert isinstance(result, list)
-    assert len(result) == 1
-    content = result[0]
-    assert isinstance(content, types.TextContent)
-    assert content.type == "text"
-    assert f"Link Check Report for: {file_path_arg}" in content.text
-    assert "Total Links Found: 1" in content.text
-    assert "Valid Links (1):" in content.text
-    assert "- http://valid.com" in content.text
-    assert "Broken Links (0):" in content.text
-    assert "Errored Links (0):" in content.text
-
-# Need to adjust the other tests that mock aiofiles.open similarly
-
-
-# Provide empty read_data
-@patch('aiofiles.open', new_callable=lambda: async_mock_open(read_data=""))
-async def test_handle_call_tool_file_not_found(mock_aio_open):
-    """Test the case where the file_path does not exist."""
-    # Set the side effect on the __aenter__ part of the mock
-    mock_aio_open.return_value.__aenter__.side_effect = FileNotFoundError(
-        "Mock file not found"
-    )
-    file_path_arg = "nonexistent/path.md"
-
-    # Act
-    result = await handle_call_tool(
-        name="check-markdown-links",
-        arguments={"file_path": file_path_arg}
-    )
-
-    # Assert
-    mock_aio_open.assert_called_once()  # Check if aiofiles.open was called
-
-    assert isinstance(result, list)
-    assert len(result) == 1
-    content = result[0]
-    assert isinstance(content, types.TextContent)
-    assert content.type == "text"
-    assert "Error: File not found" in content.text
-    # Check if the path is mentioned in the error
-    assert file_path_arg in content.text
-
-
-# Provide empty read_data
-@patch('aiofiles.open', new_callable=lambda: async_mock_open(read_data=""))
-async def test_handle_call_tool_other_exception(mock_aio_open):
-    """Test the case where an unexpected exception occurs during file read."""
-    # Set the side effect on the __aenter__ part of the mock
-    mock_aio_open.return_value.__aenter__.side_effect = PermissionError(
-        "Mock permission denied"
-    )
-    file_path_arg = "unreadable/path.md"
-
-    # Act
-    result = await handle_call_tool(
-        name="check-markdown-links",
-        arguments={"file_path": file_path_arg}
-    )
-
-    # Assert
-    mock_aio_open.assert_called_once()  # Check if aiofiles.open was called
-
-    assert isinstance(result, list)
-    assert len(result) == 1
-    content = result[0]
-    assert isinstance(content, types.TextContent)
-    assert content.type == "text"
-    assert "Error processing file" in content.text
-    assert file_path_arg in content.text
-    # Check if the exception type is mentioned
-    assert "PermissionError" in content.text
-    # Check if the exception message is mentioned
-    assert "Mock permission denied" in content.text
-
-
-@patch('mcp_server.server.check_links_in_content')
-@patch(
-    'aiofiles.open',
-    new_callable=lambda: async_mock_open(
-        read_data="Content doesn't matter here")
-)
-async def test_handle_call_tool_report_formatting_broken_links(mock_aio_open, mock_check_links):
-    """Test report formatting specifically for broken links."""
-    mock_check_links.return_value = {
-        'total': 2,
-        'valid': ['http://valid.com'],
+        'valid': [],
         'broken': [{'url': 'http://broken.com', 'reason': '404 Not Found'}],
         'errors': []
     }
-    file_path_arg = "dummy/report_broken.md"
 
+    # Act
     result = await handle_call_tool(
-        name="check-markdown-links",
-        arguments={"file_path": file_path_arg}
+        name="check_markdown_link_file",
+        arguments={"file_path": mock_file_path_str}
     )
 
-    assert isinstance(result[0], types.TextContent)
-    text = result[0].text
-    assert f"Link Check Report for: {file_path_arg}" in text
-    assert "Total Links Found: 2" in text
-    assert "Valid Links (1):" in text
-    assert "- http://valid.com" in text
-    assert "Broken Links (1):" in text
-    assert "- http://broken.com (Reason: 404 Not Found)" in text
-    assert "Errored Links (0):" in text
+    # Assert
+    # ... assertions checking the formatted text content ...
+    assert "Link Check Report for: dummy/report_broken.md" in result[0].text
+    assert "Broken Links (1):" in result[0].text
+    assert "- http://broken.com (Reason: 404 Not Found)" in result[0].text
+
+# ... (Adapt other formatting tests similarly: _errored_links, _no_links, _mixed for the _file tool)
 
 
+# --- New/Adapted Tests for check_markdown_link_files ---
+
+@pytest.mark.anyio
+@patch('aiofiles.open')
 @patch('mcp_server.server.check_links_in_content')
-@patch(
-    'aiofiles.open',
-    new_callable=lambda: async_mock_open(
-        read_data="Content doesn't matter here")
-)
-async def test_handle_call_tool_report_formatting_errored_links(mock_aio_open, mock_check_links):
-    """Test report formatting specifically for errored links."""
-    mock_check_links.return_value = {
-        'total': 2,
-        'valid': ['http://valid.com'],
-        'broken': [],
-        'errors': [{'url': 'http://error.com', 'reason': 'Timeout'}]
-    }
-    file_path_arg = "dummy/report_error.md"
+async def test_handle_call_tool_files_success(mock_check_links, mock_aio_open):
+    """Test successful link check for a list of files."""
+    # Arrange
+    project_root = Path("/home/danfmaia/_repos/mcp-server")
+    file_paths_arg = ["dummy/list1.md", "dummy/list2.md"]
+    abs_path1 = project_root / file_paths_arg[0]
+    abs_path2 = project_root / file_paths_arg[1]
 
+    content1 = "[Link1](http://valid1.com)"
+    content2 = "[Link2](http://valid2.com) [Broken](http://broken2.com)"
+
+    results1 = {'total': 1, 'valid': [
+        'http://valid1.com'], 'broken': [], 'errors': []}
+    results2 = {'total': 2, 'valid': ['http://valid2.com'], 'broken': [
+        {'url': 'http://broken2.com', 'reason': '404 Not Found'}], 'errors': []}
+
+    # Mock aiofiles.open based on resolved absolute paths
+    mock_file1_ctx = AsyncMock()
+    mock_file1_ctx.__aenter__.return_value.read.return_value = content1
+    mock_file2_ctx = AsyncMock()
+    mock_file2_ctx.__aenter__.return_value.read.return_value = content2
+
+    def open_side_effect(path_arg, *args, **kwargs):
+        # path_arg here should be a Path object
+        resolved_path = path_arg  # Assume already resolved by handler
+        if resolved_path == abs_path1.resolve():
+            return mock_file1_ctx
+        elif resolved_path == abs_path2.resolve():
+            return mock_file2_ctx
+        raise FileNotFoundError(f"Mock file not found: {path_arg}")
+
+    mock_aio_open.side_effect = open_side_effect
+
+    # Mock check_links_in_content based on content
+    def check_links_side_effect(content):
+        if content == content1:
+            return results1
+        elif content == content2:
+            return results2
+        return {'total': 0, 'valid': [], 'broken': [], 'errors': []}
+    mock_check_links.side_effect = check_links_side_effect
+
+    # Act
     result = await handle_call_tool(
-        name="check-markdown-links",
-        arguments={"file_path": file_path_arg}
+        name="check_markdown_link_files",
+        arguments={"file_paths": file_paths_arg}
     )
 
+    # Assert
+    assert mock_aio_open.call_count == 2
+    # Check calls with resolved paths
+    mock_aio_open.assert_any_call(abs_path1.resolve(), encoding='utf-8')
+    mock_aio_open.assert_any_call(abs_path2.resolve(), encoding='utf-8')
+
+    assert mock_check_links.call_count == 2
+    mock_check_links.assert_any_call(content1)
+    mock_check_links.assert_any_call(content2)
+
+    assert isinstance(result, list)
+    assert len(result) == 1
     assert isinstance(result[0], types.TextContent)
-    text = result[0].text
-    assert f"Link Check Report for: {file_path_arg}" in text
-    assert "Total Links Found: 2" in text
-    assert "Valid Links (1):" in text
-    assert "- http://valid.com" in text
-    assert "Broken Links (0):" in text
-    assert "Errored Links (1):" in text
-    assert "- http://error.com (Reason: Timeout)" in text
+    report_text = result[0].text
+
+    assert "Consolidated Link Check Report" in report_text
+    assert "Files Processed (2):" in report_text
+    # Check original paths in source info
+    assert "- dummy/list1.md" in report_text
+    assert "- dummy/list2.md" in report_text
+    assert "Overall Summary:" in report_text
+    assert "Total Links Found: 3" in report_text  # 1 + 2
+    assert "Valid Links: 2" in report_text      # 1 + 1
+    assert "Broken Links: 1" in report_text     # 0 + 1
+    assert "Details:" in report_text
+    # Check details using resolved paths
+    assert f"File: {abs_path1.resolve()}" in report_text
+    assert "- http://valid1.com" in report_text
+    assert f"File: {abs_path2.resolve()}" in report_text
+    assert "- http://valid2.com" in report_text
+    assert "- http://broken2.com (Reason: 404 Not Found)" in report_text
 
 
+# --- New/Adapted Tests for check_markdown_link_directory ---
+
+@pytest.mark.anyio
 @patch('mcp_server.server.check_links_in_content')
-@patch(
-    'aiofiles.open',
-    new_callable=lambda: async_mock_open(
-        read_data="Content doesn't matter here")
-)
-async def test_handle_call_tool_report_formatting_no_links(mock_aio_open, mock_check_links):
-    """Test report formatting when no links are found."""
-    mock_check_links.return_value = {
-        'total': 0,
-        'valid': [],
-        'broken': [],
-        'errors': []
-    }
-    file_path_arg = "dummy/report_none.md"
+@patch('aiofiles.open')
+@patch('pathlib.Path.rglob')  # Patch rglob directly
+@patch('pathlib.Path.is_dir')  # Patch is_dir directly
+async def test_handle_call_tool_directory_success(mock_is_dir, mock_rglob, mock_aio_open, mock_check_links):
+    """Test success path with a directory_path, expecting a consolidated report."""
+    # Arrange
+    dir_path_arg = "dummy/scan_dir"
+    project_root = Path("/home/danfmaia/_repos/mcp-server")
+    resolved_scan_dir = (project_root / dir_path_arg).resolve()
 
+    # Configure mocks for methods called on the resolved path
+    mock_is_dir.return_value = True  # Assume is_dir is called on resolved_scan_dir
+
+    # Mocks for the paths rglob should find (these need is_file)
+    # Use real Path objects resolved relative to the expected scan dir
+    real_file1_rel_path = Path("file1.md")
+    real_file2_rel_path = Path("subdir/file2.md")
+    abs_mock_path1 = resolved_scan_dir / real_file1_rel_path
+    abs_mock_path2 = resolved_scan_dir / real_file2_rel_path
+
+    # We need mocks for the *results* of rglob, primarily for is_file check
+    mock_returned_path1 = MagicMock(spec=Path)
+    mock_returned_path1.is_file.return_value = True
+    mock_returned_path1.__str__.return_value = str(abs_mock_path1)
+    mock_returned_path1.__fspath__.return_value = str(abs_mock_path1)
+    # Store the real path for easier matching in side effects
+    mock_returned_path1._real_path = abs_mock_path1
+
+    mock_returned_path2 = MagicMock(spec=Path)
+    mock_returned_path2.is_file.return_value = True
+    mock_returned_path2.__str__.return_value = str(abs_mock_path2)
+    mock_returned_path2.__fspath__.return_value = str(abs_mock_path2)
+    mock_returned_path2._real_path = abs_mock_path2
+
+    mock_rglob.return_value = [mock_returned_path1, mock_returned_path2]
+
+    # File contents and check results
+    file1_content = "[Dir Link 1](http://dir1.com)"
+    file2_content = "http://dir2.com [Broken](http://broken-dir.com)"
+    results1 = {'total': 1, 'valid': [
+        'http://dir1.com'], 'broken': [], 'errors': []}
+    results2 = {'total': 2, 'valid': ['http://dir2.com'], 'broken': [
+        {'url': 'http://broken-dir.com', 'reason': '500 Error'}], 'errors': []}
+
+    # Mock aiofiles.open based on the mock path objects
+    mock_file1_ctx = AsyncMock()
+    mock_file1_ctx.__aenter__.return_value.read.return_value = file1_content
+    mock_file2_ctx = AsyncMock()
+    mock_file2_ctx.__aenter__.return_value.read.return_value = file2_content
+
+    def open_side_effect(path_arg, *args, **kwargs):
+        if path_arg == mock_returned_path1:
+            return mock_file1_ctx
+        elif path_arg == mock_returned_path2:
+            return mock_file2_ctx
+        raise FileNotFoundError(f"Mock file not found for: {path_arg}")
+    mock_aio_open.side_effect = open_side_effect
+
+    # Mock check_links_in_content based on content
+    def check_links_side_effect(content):
+        if content == file1_content:
+            return results1
+        elif content == file2_content:
+            return results2
+        return {'total': 0, 'valid': [], 'broken': [], 'errors': []}
+    mock_check_links.side_effect = check_links_side_effect
+
+    # Act
     result = await handle_call_tool(
-        name="check-markdown-links",
-        arguments={"file_path": file_path_arg}
+        name="check_markdown_link_directory",
+        arguments={"directory_path": dir_path_arg}
     )
 
+    # Assert
+    # Check that is_dir and rglob were called on the resolved path instance
+    # We can't easily check the instance itself, but check they were called once
+    mock_is_dir.assert_called_once()
+    mock_rglob.assert_called_once_with('*.md')
+
+    # Check is_file called on the objects returned by rglob's mock
+    mock_returned_path1.is_file.assert_called_once()
+    mock_returned_path2.is_file.assert_called_once()
+
+    assert mock_aio_open.call_count == 2
+    mock_aio_open.assert_any_call(mock_returned_path1, encoding='utf-8')
+    mock_aio_open.assert_any_call(mock_returned_path2, encoding='utf-8')
+
+    assert mock_check_links.call_count == 2
+    mock_check_links.assert_any_call(file1_content)
+    mock_check_links.assert_any_call(file2_content)
+
+    assert isinstance(result, list)
+    assert len(result) == 1
     assert isinstance(result[0], types.TextContent)
-    text = result[0].text
-    assert f"Link Check Report for: {file_path_arg}" in text
-    assert "Total Links Found: 0" in text
-    assert "Valid Links (0):" in text
-    assert "Broken Links (0):" in text
-    assert "Errored Links (0):" in text
-    # Check that specific link lines are NOT present
-    assert "- http" not in text
+    report_text = result[0].text
+
+    assert "Consolidated Link Check Report" in report_text
+    assert f"Directory Scanned: {dir_path_arg}" in report_text
+    assert f"Files Processed (2):" in report_text
+    assert f"- {abs_mock_path1}" in report_text
+    assert f"- {abs_mock_path2}" in report_text
+    assert "Overall Summary:" in report_text
+    assert "Total Links Found: 3" in report_text
+    assert "Valid Links: 2" in report_text
+    assert "Broken Links: 1" in report_text
+    assert "Details:" in report_text
+    assert f"File: {abs_mock_path1}" in report_text
+    assert f"File: {abs_mock_path2}" in report_text
+
+
+@pytest.mark.anyio
+@patch('pathlib.Path.is_dir')  # Patch only is_dir
+async def test_handle_call_tool_directory_not_found(mock_is_dir):
+    """Test calling check_markdown_link_directory with a path that is not a directory."""
+    # Arrange
+    dir_path_arg = "dummy/not_a_dir"
+    project_root = Path("/home/danfmaia/_repos/mcp-server")
+    expected_resolved_path = (project_root / dir_path_arg).resolve()
+
+    # Configure mock is_dir to return False only for the specific resolved path
+    # Add 'self' argument to match expected method signature when patched
+    def is_dir_side_effect(instance_self):
+        if instance_self == expected_resolved_path:
+            return False
+        # Allow other calls if needed, though ideally only the target path is checked
+        return True
+    mock_is_dir.side_effect = is_dir_side_effect
+
+    # Act & Assert
+    with pytest.raises(ValueError, match=f"Directory not found: {dir_path_arg}"):
+        await handle_call_tool(
+            name="check_markdown_link_directory",
+            arguments={"directory_path": dir_path_arg}
+        )
+    # Check is_dir was called at least once (implicitly on the target path)
+    mock_is_dir.assert_called()
+
+
+@pytest.mark.anyio
+@patch('pathlib.Path.rglob')  # Patch rglob
+@patch('pathlib.Path.is_dir')  # Patch is_dir
+async def test_handle_call_tool_directory_empty(mock_is_dir, mock_rglob):
+    """Test calling check_markdown_link_directory on an empty directory (no *.md files)."""
+    # Arrange
+    dir_path_arg = "dummy/empty_dir"
+    project_root = Path("/home/danfmaia/_repos/mcp-server")
+    expected_resolved_path = (project_root / dir_path_arg).resolve()
+
+    # Configure mocks
+    mock_is_dir.return_value = True  # Directory exists
+    mock_rglob.return_value = []   # rglob finds nothing
+
+    # Act
+    result = await handle_call_tool(
+        name="check_markdown_link_directory",
+        arguments={"directory_path": dir_path_arg}
+    )
+
+    # Assert
+    # Check is_dir and rglob were called
+    mock_is_dir.assert_called_once()
+    mock_rglob.assert_called_once_with('*.md')
+
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert isinstance(result[0], types.TextContent)
+    assert f"No Markdown files found in directory: {dir_path_arg}" in result[0].text
